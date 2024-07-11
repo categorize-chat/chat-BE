@@ -8,13 +8,16 @@ exports.registerUser = async (req, res, next) => {
       nickname: req.body.nickname,
     });
 
-    const user = await User.find({ nickname: req.body.nickname });
+    const user = await User.findOne({ nickname: req.body.nickname });
     console.log(user);
     res.json({
-      isSuccess: true, // 성공 여부 (true/false)
+      isSuccess: true, // 성공 여부 (Strue/false)
       code: 200, // 응답 코드
       message: "요청에 성공했습니다.", // 응답 메세지
-      result: { user },
+      result: { 
+        userId : user.userId,
+        nickname : user.nickname,
+       },
     });
   } catch (error) {
     console.error(error);
