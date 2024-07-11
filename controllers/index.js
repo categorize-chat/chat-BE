@@ -26,7 +26,7 @@ exports.renderMain = async (req, res, next) => {
       isSuccess: true, // 성공 여부 (true/false)
       code: 200, // 응답 코드
       message: "요청에 성공했습니다.", // 응답 메세지
-      result: {channels},
+      result: { channels },
     });
   } catch (error) {
     console.error(error);
@@ -58,10 +58,15 @@ exports.enterRoom = async (req, res, next) => {
     const { rooms } = io.of("/chat").adapter;
     console.log(rooms, rooms.get(req.params.id), rooms.get(req.params.id));
 
-    const chats = await Chat.find({ room: room._id }).sort("createdAt");
-    console.log(chats);
+    const messages = await Chat.find({ room: room._id }).sort("createdAt");
+    console.log(messages);
     console.log("debug");
-    return res.json(chats);
+    return res.json({
+      isSuccess: true, // 성공 여부 (true/false)
+      code: 200, // 응답 코드
+      message: "요청에 성공했습니다.", // 응답 메세지
+      result: { messages },
+    });
   } catch (error) {
     console.error(error);
     return next(error);

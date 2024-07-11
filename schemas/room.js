@@ -6,6 +6,16 @@ const roomSchema = new Schema({
     type: String,
     required: true,
   },
+  channelId: {
+    type: String,
+    default: function() {
+      return this._id.toString();
+    }
+  }
+}, {
+  versionKey: false,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
 });
 
 module.exports = mongoose.model('Room', roomSchema);
