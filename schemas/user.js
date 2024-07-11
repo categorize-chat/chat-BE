@@ -1,12 +1,13 @@
 const mongoose = require('mongoose');
 
 const { Schema } = mongoose;
-const roomSchema = new Schema({
-  channelName: {
+const userSchema = new Schema({
+  nickname: {
     type: String,
     required: true,
   },
-  channelId: {
+  userId: {
+    unique: true,
     type: String,
     default: function() {
       return this._id.toString();
@@ -19,4 +20,4 @@ const roomSchema = new Schema({
   toObject: { virtuals: true }
 });
 
-module.exports = mongoose.model('Room', roomSchema);
+module.exports = mongoose.model('User', userSchema);

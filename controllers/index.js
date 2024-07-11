@@ -1,16 +1,20 @@
 const Room = require("../schemas/room");
 const Chat = require("../schemas/chat");
+const User = require("../schemas/user");
 
 exports.registerUser = async (req, res, next) => {
   try {
+    const newUser = await User.create({
+      nickname: req.body.nickname,
+    });
+
+    const user = await User.find({ nickname: req.body.nickname });
+    console.log(user);
     res.json({
       isSuccess: true, // 성공 여부 (true/false)
       code: 200, // 응답 코드
       message: "요청에 성공했습니다.", // 응답 메세지
-      result: {
-        userId: "a5263a4a-b036-49b1-9dd3-58dcbf3207b8", //수정 필요
-        nickname: req.body.nickname,
-      },
+      result: { user },
     });
   } catch (error) {
     console.error(error);
