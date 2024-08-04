@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 
 const {
-  registerUser, renderMain, createRoom, enterRoom, sendChat,
+  registerUser, renderMain, createRoom, enterRoom, sendChat, classifyChat
 } = require('../controllers');
 
 const router = express.Router();
@@ -18,5 +18,7 @@ router.post('/chat', createRoom);
 router.get('/chat/:id', enterRoom);
 
 router.post('/chat/:id', sendChat);
+
+router.post('/classify', classifyChat);
 
 module.exports = router;

@@ -10,7 +10,7 @@ const cors = require('cors');
 
 dotenv.config();
 const webSocket = require('./socket');
-const indexRouter = require('./routes');
+const indexRouter = require('./routes/');
 const connect = require('./schemas');
 
 const app = express();

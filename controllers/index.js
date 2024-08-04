@@ -1,10 +1,11 @@
 const Room = require("../schemas/room");
 const Chat = require("../schemas/chat");
 const User = require("../schemas/user");
+const classifyTopics = require('../services/chatClassifier');
 
 exports.registerUser = async (req, res, next) => {
   try {
-    const exist = await User.findOne({ nickname: req.body.nickname });
+    const exist = 0; //await User.findOne({ nickname: req.body.nickname }); for debug
 
     if (!exist) {
       const newUser = await User.create({
@@ -123,5 +124,19 @@ exports.sendChat = async (req, res, next) => {
   } catch (error) {
     console.error(error);
     next(error);
+  }
+};
+
+exports.classifyChat = async (req, res, next) => {
+  try {
+    const { roomId } = req.body;
+    if (!roomId) {
+      return res.status(400).json({ error: 'roomId is required' });
+    }
+    const result = await classifyTopics(roomId);
+    res.status(200).json({ result });
+  } catch (error) {
+    console.error('Error in chat classification:', error);
+    res.status(500).json({ error: 'An error occurred during chat classification' });
   }
 };
