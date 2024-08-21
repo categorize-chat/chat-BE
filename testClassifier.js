@@ -94,5 +94,5 @@ async function testClassifier(roomId) {
   console.log(`Total execution time: ${(endTime - startTime) / 1000} seconds`);
 }
 
-const testRoomId = '66a13a8bd4b4e6cca1cffc42'; // 실제 룸 ID
+const testRoomId = '66b0fd658aab9f2bd7a41845'; // 실제 룸 ID
 testClassifier(testRoomId);

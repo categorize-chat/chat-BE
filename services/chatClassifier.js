@@ -1,40 +1,81 @@
 const mongoose = require('mongoose');
-const { OpenAI } = require('openai');
 const Chat = require('../schemas/chat');
+const { OpenAI } = require('openai');
+const { PCA } = require('ml-pca');
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-async function getEmbedding(text) {
+async function getEmbedding(chat) {
+  if (chat.embedding) {
+    return chat.embedding;
+  }
+
   const response = await openai.embeddings.create({
     model: "text-embedding-3-small",
-    input: text,
+    input: chat.content,
   });
-  return response.data[0].embedding;
-}
-
-function cosineSimilarity(vec1, vec2) {
-  const dotProduct = vec1.reduce((acc, val, i) => acc + val * vec2[i], 0);
-  const mag1 = Math.sqrt(vec1.reduce((acc, val) => acc + val * val, 0));
-  const mag2 = Math.sqrt(vec2.reduce((acc, val) => acc + val * val, 0));
-  return dotProduct / (mag1 * mag2);
-}
-
-function weightedSimilarity(point1, point2, speakerWeight = 0.2, timeWeight = 0.1) {
-  const contentSimilarity = cosineSimilarity(point1.embedding, point2.embedding);
-  const speakerSimilarity = point1.chat.nickname === point2.chat.nickname ? 1 : 0;
   
-  // 시간 차이에 따른 유사도 계산 (1시간 이내면 1, 그 이상이면 지수적으로 감소)
-  const timeDiff = Math.abs(point1.chat.createdAt - point2.chat.createdAt) / (1000 * 60 * 60); // 시간 단위로 변환
-  const timeSimilarity = Math.exp(-timeDiff); // 지수 감소 함수 사용
+  const embedding = response.data[0].embedding;
+  
+  chat.embedding = embedding;
+  await chat.save();
+  
+  return embedding;
+}
 
+function calculateTimeSimilarity(time1, time2) {
+  const diffInMinutes = Math.abs(time1 - time2) / (1000 * 60);
+  if (diffInMinutes <= 10) {
+    return 1;
+  } else {
+    return Math.exp(-0.1 * (diffInMinutes - 10));
+  }
+}
+
+function euclideanDistance(vec1, vec2) {
+  return Math.sqrt(vec1.reduce((sum, v, i) => sum + Math.pow(v - vec2[i], 2), 0));
+}
+
+function normalizeVector(vec) {
+  const magnitude = Math.sqrt(vec.reduce((sum, v) => sum + v * v, 0));
+  return vec.map(v => v / magnitude);
+}
+
+function weightedSimilarity(point1, point2, speakerWeight = 0.2, timeWeight = 0.2) {
+  const normalizedVec1 = normalizeVector(point1.reducedEmbedding);
+  const normalizedVec2 = normalizeVector(point2.reducedEmbedding);
+  const contentDistance = euclideanDistance(normalizedVec1, normalizedVec2);
+  const contentSimilarity = 1 / (1 + contentDistance);
+  const speakerSimilarity = point1.chat.nickname === point2.chat.nickname ? 1 : 0;
+  const timeSimilarity = calculateTimeSimilarity(point1.chat.createdAt, point2.chat.createdAt);
+  
   return contentSimilarity * (1 - speakerWeight - timeWeight) + 
          speakerSimilarity * speakerWeight + 
          timeSimilarity * timeWeight;
 }
 
-function dbscanWithWeights(points, eps, minPts, speakerWeight, timeWeight) {
+function findeps(points, k) {
+  const distances = points.map(point => {
+    const otherPoints = points.filter(p => p !== point);
+    const kDistances = otherPoints
+      .map(otherPoint => euclideanDistance(
+        normalizeVector(point.reducedEmbedding),
+        normalizeVector(otherPoint.reducedEmbedding)
+      ))
+      .sort((a, b) => a - b);
+    return kDistances[k - 1];
+  });
+
+  distances.sort((a, b) => a - b);
+  
+  // 중앙값을 사용하여 eps 값 결정
+  const medianIndex = Math.floor(distances.length / 2);
+  return distances[medianIndex];
+}
+
+function dbscanWithSpeakerWeight(points, eps, minPts, speakerWeight, timeWeight) {
   const clusters = [];
   const visited = new Set();
   const noise = new Set();
@@ -83,67 +124,54 @@ async function classifyTopics(roomId) {
   const chats = await Chat.find({ room: roomId }).sort('createdAt');
   const chatPoints = await Promise.all(chats.map(async (chat) => ({
     id: chat._id.toString(),
-    embedding: await getEmbedding(chat.content),
+    embedding: await getEmbedding(chat),
     chat: chat
   })));
 
-  const eps = 0.4; // 가중치를 고려하여 임계값 조정
-  const minPoints = 2; // 최소 포인트 수
-  const speakerWeight = 0.2; // 화자 가중치 (0 ~ 1 사이 값)
-  const timeWeight = 0.15; // 시간 가중치 (0 ~ 1 사이 값)
+  // PCA를 사용한 차원 축소
+  const embeddings = chatPoints.map(point => point.embedding);
+  const pca = new PCA(embeddings);
+  const reducedEmbeddings = pca.predict(embeddings, { nComponents: 10 });  // 10차원으로 축소
 
-  const { clusters, noise } = dbscanWithWeights(chatPoints, eps, minPoints, speakerWeight, timeWeight);
+  const reducedChatPoints = chatPoints.map((point, index) => ({
+    ...point,
+    reducedEmbedding: reducedEmbeddings.getRow(index)
+  }));
+
+  const eps = 0.6;
+  const minPoints = 2;
+  const speakerWeight = 0.15;
+  const timeWeight = 0.3;
+
+  const { clusters, noise } = dbscanWithSpeakerWeight(reducedChatPoints, eps, minPoints, speakerWeight, timeWeight);
 
   const result = { messages: {} };
 
-  // 클러스터 처리
   for (const [index, cluster] of clusters.entries()) {
-    const clusterChats = cluster.map(i => chatPoints[i].chat);
-    const clusterContent = clusterChats.map(chat => chat.content).join('\n');
-    //const summary = await summarizeChats(clusterContent);
-
+    const clusterChats = cluster.map(i => reducedChatPoints[i].chat);
     result.messages[`topic${index + 1}`] = {
       chats: clusterChats.map(chat => ({
         id: chat._id.toString(),
         nickname: chat.nickname,
         createdAt: chat.createdAt.toISOString(),
         content: chat.content
-      })),
-      //summary: summary
+      }))
     };
   }
 
-  // 노이즈 처리
   if (noise.length > 0) {
-    const noiseChats = noise.map(i => chatPoints[i].chat);
-    const noiseContent = noiseChats.map(chat => chat.content).join('\n');
-    //const noiseSummary = await summarizeChats(noiseContent);
-
+    const noiseChats = noise.map(i => reducedChatPoints[i].chat);
     result.messages.uncategorized = {
       chats: noiseChats.map(chat => ({
         id: chat._id.toString(),
         nickname: chat.nickname,
         createdAt: chat.createdAt.toISOString(),
         content: chat.content
-      })),
-      //summary: noiseSummary
+      }))
     };
   }
 
   return result;
 }
-
-/*
-async function summarizeChats(content) {
-  const response = await openai.chat.completions.create({
-    model: "gpt-3.5-turbo",
-    messages: [
-      { role: "system", content: "주어진 채팅 내용을 간략하게 요약해주세요. 주요 주제와 핵심 포인트만 언급해주세요." },
-      { role: "user", content }
-    ],
-  });
-  return response.choices[0].message.content;
-}
-*/
 
 module.exports = classifyTopics;

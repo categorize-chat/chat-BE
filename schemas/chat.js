@@ -18,6 +18,10 @@ const chatSchema = new Schema({
     default: Date.now,
   },
   topic: String,
+  embedding: {
+    type: [Number],
+    default: null,
+  },
 });
 
 module.exports = mongoose.model('Chat', chatSchema);
