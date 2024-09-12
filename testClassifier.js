@@ -1,14 +1,11 @@
 require('dotenv').config();
 const mongoose = require('mongoose');
-const { OpenAI } = require('openai');
+const axios = require('axios');
+const { spawn } = require('child_process');
 const classifyTopics = require('./services/chatClassifier');
 const chatSchema = require('./schemas/chat');
 
 mongoose.set('strictQuery', false);
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
 
 async function connectToMongoDB() {
   try {
@@ -29,6 +26,30 @@ try {
   Chat = mongoose.model('Chat');
 } catch (error) {
   Chat = mongoose.model('Chat', chatSchema);
+}
+
+function trainModel() {
+  return new Promise((resolve, reject) => {
+    const pythonProcess = spawn('python', ['model.py']);
+
+    pythonProcess.stdout.on('data', (data) => {
+      console.log(`Python stdout: ${data}`);
+    });
+
+    pythonProcess.stderr.on('data', (data) => {
+      console.error(`Python stderr: ${data}`);
+    });
+
+    pythonProcess.on('close', (code) => {
+      if (code === 0) {
+        console.log('Model training completed successfully');
+        resolve();
+      } else {
+        console.error(`Model training process exited with code ${code}`);
+        reject(new Error(`Model training failed with code ${code}`));
+      }
+    });
+  });
 }
 
 async function testClassifier(roomId) {
@@ -53,24 +74,15 @@ async function testClassifier(roomId) {
       console.log(`${chat.nickname}: ${chat.content}`);
     });
 
-    try {
-      const testEmbedding = await openai.embeddings.create({
-        model: "text-embedding-3-small",
-        input: "Test message",
-      });
-      console.log('OpenAI API test successful');
-    } catch (apiError) {
-      console.error('OpenAI API test failed:', apiError);
-      return;
-    }
+    console.log('Starting model training...');
+    await trainModel();
+    console.log('Model training completed');
 
     console.log(`Starting classification at ${new Date().toISOString()}`);
     const result = await classifyTopics(objectIdRoomId);
     console.log(`Classification completed at ${new Date().toISOString()}`);
 
     console.log('Classification result:');
-    console.log(JSON.stringify(result, null, 2));
-
     if (Object.keys(result.messages).length === 0) {
       console.log('No topics were classified. This might indicate an issue with the classification logic.');
     } else {
@@ -78,7 +90,10 @@ async function testClassifier(roomId) {
       for (const [topic, data] of Object.entries(result.messages)) {
         console.log(`Topic: ${topic}`);
         console.log(`Number of chats: ${data.chats.length}`);
-        console.log(`Summary: ${data.summary}`);
+        console.log('Chats in this topic:');
+        data.chats.forEach(chat => {
+          console.log(`  ${chat.nickname}: ${chat.content}`);
+        });
         console.log('---');
       }
     }
