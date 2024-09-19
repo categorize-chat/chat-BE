@@ -2,13 +2,13 @@ from flask import Flask, request, jsonify
 import tensorflow as tf
 from tensorflow import keras
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timezone
 from openai import OpenAI
 import os
 from pymongo import MongoClient
 from dotenv import load_dotenv
 from bson import ObjectId
-from sklearn.model_selection import train_test_split
+from dateutil import parser
 
 # .env 파일 로드
 load_dotenv()
@@ -16,156 +16,56 @@ load_dotenv()
 app = Flask(__name__)
 
 # MongoDB 연결
-client = MongoClient('mongodb://localhost:27017/')
-db = client['your_database_name']
+mongodb_uri = os.getenv('MONGODB_URI')
+if not mongodb_uri or not mongodb_uri.startswith(('mongodb://', 'mongodb+srv://')):
+    raise ValueError("Invalid MONGODB_URI. It must start with 'mongodb://' or 'mongodb+srv://'")
+
+client = MongoClient(mongodb_uri)
+db = client.get_database()
 chat_collection = db['chats']
+
+# 연결 테스트
+try:
+    client.admin.command('ping')
+    print("Successfully connected to MongoDB")
+except Exception as e:
+    print(f"Failed to connect to MongoDB: {e}")
+    raise
 
 # OpenAI 클라이언트 초기화
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-def create_catdflow_model(input_dim, lstm_units):
+# 전역 변수로 임베딩 차원 설정
+EMBEDDING_DIM = 1536  # OpenAI의 text-embedding-3-small 모델의 실제 출력 차원
+ADDITIONAL_FEATURES = 2  # nickname_emb와 time_diff
+EXPECTED_DIM = EMBEDDING_DIM + ADDITIONAL_FEATURES
+
+def create_catdflow_model(lstm_units, output_dim):
     model = keras.Sequential([
-        keras.layers.LSTM(lstm_units, input_shape=(None, input_dim), return_sequences=True),
-        keras.layers.Dense(1)
+        keras.layers.Input(shape=(None, EXPECTED_DIM)),
+        keras.layers.LSTM(lstm_units, return_sequences=False),
+        keras.layers.Dense(output_dim)
     ])
     return model
 
-def create_catdmatch_model(input_dim):
-    inputs = keras.Input(shape=(None, input_dim))
-    lstm_output = keras.layers.LSTM(input_dim, return_sequences=True)(inputs)
-    attention_output = keras.layers.Attention()([lstm_output, lstm_output])
-    dense_output = keras.layers.Dense(input_dim, activation='tanh')(attention_output)
+def create_catdmatch_model(output_dim):
+    inputs = keras.Input(shape=(None, EXPECTED_DIM))
+    lstm_output = keras.layers.LSTM(EXPECTED_DIM, return_sequences=False)(inputs)
+    dense_output = keras.layers.Dense(output_dim)(lstm_output)
     model = keras.Model(inputs=inputs, outputs=dense_output)
     return model
 
-def train_and_save_models(X_train, y_train, epochs=10):
-    input_dim = X_train.shape[-1]
-    lstm_units = 400
-
-    catdflow_model = create_catdflow_model(input_dim, lstm_units)
-    catdflow_model.compile(optimizer='adam', loss='mse')
-    catdflow_model.fit(X_train, y_train, epochs=epochs, validation_split=0.2)
-
-    catdmatch_model = create_catdmatch_model(input_dim)
-    catdmatch_model.compile(optimizer='adam', loss='mse')
-    catdmatch_model.fit(X_train, y_train, epochs=epochs, validation_split=0.2)
-
-    models_dir = os.path.join(os.path.dirname(__file__), 'models')
-    os.makedirs(models_dir, exist_ok=True)
-    
-    catdflow_weights_path = os.path.join(models_dir, 'catdflow_model_weights.h5')
-    catdmatch_weights_path = os.path.join(models_dir, 'catdmatch_model_weights.h5')
-    
-    catdflow_model.save_weights(catdflow_weights_path)
-    catdmatch_model.save_weights(catdmatch_weights_path)
-
-    return catdflow_model, catdmatch_model
-
-def prepare_training_data(room_id):
-    # 특정 채팅방의 마지막 100개 메시지 가져오기
-    chats = list(chat_collection.find({'room': ObjectId(room_id)}).sort('createdAt', -1).limit(100))
-    chats.reverse()  # 시간 순으로 정렬
-
-    if len(chats) < 10:  # 메시지가 10개 미만이면 에러 발생
-        raise ValueError("Not enough messages in the chat room")
-
-    # 채팅 메시지 전처리
-    processed_chats = preprocess_chats(chats)
-
-    X = []
-    y = []
-
-    # 학습 데이터 생성
-    for i in range(1, len(processed_chats)):
-        thread = processed_chats[:i]
-        new_message = processed_chats[i]
-
-        # 스레드의 마지막 20개 메시지만 사용
-        thread = thread[-20:]
-
-        X.append(np.array(thread + [new_message]))
-        
-        # 레이블 생성 (같은 스레드면 1, 아니면 0)
-        time_diff = abs(chats[i]['createdAt'] - chats[i-1]['createdAt']).total_seconds()
-        y.append(1 if time_diff <= 300 else 0)  # 5분 이내면 같은 스레드로 가정
-
-    # numpy 배열로 변환
-    X = np.array(X)
-    y = np.array(y)
-
-    # 학습 데이터와 검증 데이터 분리
-    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
-
-    return X_train, y_train, X_val, y_val
-
-def preprocess_chats(chats):
-    processed_chats = []
-    nickname_map = {}
-    
-    def get_nickname_embedding(nickname):
-        if nickname not in nickname_map:
-            nickname_map[nickname] = len(nickname_map)
-        return nickname_map[nickname]
-    
-    def get_time_diff_embedding(time1, time2):
-        diff_minutes = abs((time1 - time2).total_seconds()) / 60
-        if diff_minutes <= 1: return 0
-        elif diff_minutes <= 5: return 1
-        elif diff_minutes <= 10: return 2
-        elif diff_minutes <= 30: return 3
-        elif diff_minutes <= 60: return 4
-        elif diff_minutes <= 120: return 5
-        elif diff_minutes <= 240: return 6
-        elif diff_minutes <= 480: return 7
-        elif diff_minutes <= 720: return 8
-        elif diff_minutes <= 1440: return 9
-        else: return 10
-
-    for chat in chats:
-        embedding = chat.get('embedding', [0] * 1536)  # 임베딩이 없는 경우 0으로 채움
-        nickname_emb = get_nickname_embedding(chat['nickname']) / len(nickname_map)
-        time_diff = get_time_diff_embedding(chat['createdAt'], datetime.now())
-        
-        processed_chat = embedding + [nickname_emb, time_diff / 11]
-        processed_chats.append(processed_chat)
-
-    return processed_chats
-
-# 모델 가중치 파일 경로 설정
-models_dir = os.path.join(os.path.dirname(__file__), 'models')
-catdflow_weights_path = os.path.join(models_dir, 'catdflow_model_weights.h5')
-catdmatch_weights_path = os.path.join(models_dir, 'catdmatch_model_weights.h5')
-
-# 모델 생성 또는 로드
-input_dim = 1538  # 임베딩 차원(1536) + 추가 특성(2)
-lstm_units = 400
-
-if os.getenv('TRAIN_MODELS', 'false').lower() == 'true':
-    room_id = os.getenv('TRAIN_ROOM_ID')
-    if not room_id:
-        raise ValueError("TRAIN_ROOM_ID must be set in .env file for training")
-    X_train, y_train, _, _ = prepare_training_data(room_id)
-    catdflow_model, catdmatch_model = train_and_save_models(X_train, y_train)
-else:
-    catdflow_model = create_catdflow_model(input_dim, lstm_units)
-    catdmatch_model = create_catdmatch_model(input_dim)
-    catdflow_model.load_weights(catdflow_weights_path)
-    catdmatch_model.load_weights(catdmatch_weights_path)
-
 def get_or_create_embedding(chat_id, content):
-    # MongoDB에서 임베딩 검색
     chat_doc = chat_collection.find_one({"_id": chat_id})
     if chat_doc and 'embedding' in chat_doc:
         return chat_doc['embedding']
     
-    # 임베딩이 없는 경우, 새로 생성
     response = openai_client.embeddings.create(
         model="text-embedding-3-small",
         input=content
     )
     embedding = response.data[0].embedding
     
-    # 새 임베딩을 MongoDB에 저장
     chat_collection.update_one(
         {"_id": chat_id},
         {"$set": {"embedding": embedding}},
@@ -175,43 +75,184 @@ def get_or_create_embedding(chat_id, content):
     return embedding
 
 def preprocess_input(thread, new_message):
-    nickname_map = {}
+    try:
+        nickname_map = {}
+        
+        def get_nickname_embedding(nickname):
+            if nickname not in nickname_map:
+                nickname_map[nickname] = len(nickname_map)
+            return nickname_map[nickname]
+        
+        def get_time_diff_embedding(time1, time2):
+            if time1.tzinfo is None:
+                time1 = time1.replace(tzinfo=timezone.utc)
+            if time2.tzinfo is None:
+                time2 = time2.replace(tzinfo=timezone.utc)
+            
+            diff_minutes = abs((time1 - time2).total_seconds()) / 60
+            if diff_minutes <= 1: return 0
+            elif diff_minutes <= 5: return 1
+            elif diff_minutes <= 10: return 2
+            elif diff_minutes <= 30: return 3
+            elif diff_minutes <= 60: return 4
+            elif diff_minutes <= 120: return 5
+            elif diff_minutes <= 240: return 6
+            elif diff_minutes <= 480: return 7
+            elif diff_minutes <= 720: return 8
+            elif diff_minutes <= 1440: return 9
+            else: return 10
+        
+        current_time = datetime.now(timezone.utc)
+        
+        processed_thread = []
+        processed_ids = set()  # 중복 검사를 위한 set
+
+        if isinstance(thread, list) and len(thread) > 0 and isinstance(thread[0], list):
+            thread = thread[0]
+
+        for msg in thread:
+            msg_id = msg.get('id') or msg.get('_id')
+            if not msg_id:
+                print(f"Warning: Message without id: {msg}")
+                continue
+            
+            if msg_id in processed_ids:
+                continue
+            processed_ids.add(msg_id)
+            
+            embedding = get_or_create_embedding(msg_id, msg['content'])
+            nickname_emb = get_nickname_embedding(msg['nickname']) / (len(nickname_map) + 1)
+            
+            if isinstance(msg['createdAt'], datetime):
+                msg_time = msg['createdAt']
+            else:
+                msg_time = parser.isoparse(msg['createdAt'])
+            
+            if msg_time.tzinfo is None:
+                msg_time = msg_time.replace(tzinfo=timezone.utc)
+            
+            time_diff = get_time_diff_embedding(msg_time, current_time)
+            processed_thread.append(embedding + [nickname_emb, time_diff / 11])
+        
+        new_msg_id = new_message.get('_id') or new_message.get('id')
+        new_msg_embedding = get_or_create_embedding(new_msg_id, new_message['content'])
+        new_msg_nickname_emb = get_nickname_embedding(new_message['nickname']) / (len(nickname_map) + 1)
+        
+        if isinstance(new_message['createdAt'], datetime):
+            new_msg_time = new_message['createdAt']
+        else:
+            new_msg_time = parser.isoparse(new_message['createdAt'])
+        
+        if new_msg_time.tzinfo is None:
+            new_msg_time = new_msg_time.replace(tzinfo=timezone.utc)
+        
+        new_msg_time_diff = get_time_diff_embedding(new_msg_time, current_time)
+        processed_new_message = new_msg_embedding + [new_msg_nickname_emb, new_msg_time_diff / 11]
+        
+        processed_thread = np.array(processed_thread)
+        processed_new_message = np.array(processed_new_message)
+
+        if len(processed_thread) > 0 and processed_thread.shape[1] != EXPECTED_DIM:
+            print(f"Warning: Thread dimension mismatch. Expected {EXPECTED_DIM}, got {processed_thread.shape[1]}")
+            if processed_thread.shape[1] > EXPECTED_DIM:
+                processed_thread = processed_thread[:, :EXPECTED_DIM]
+            else:
+                padding = np.zeros((processed_thread.shape[0], EXPECTED_DIM - processed_thread.shape[1]))
+                processed_thread = np.hstack((processed_thread, padding))
+
+        if len(processed_new_message) != EXPECTED_DIM:
+            print(f"Warning: New message dimension mismatch. Expected {EXPECTED_DIM}, got {len(processed_new_message)}")
+            if len(processed_new_message) > EXPECTED_DIM:
+                processed_new_message = processed_new_message[:EXPECTED_DIM]
+            else:
+                processed_new_message = np.pad(processed_new_message, (0, EXPECTED_DIM - len(processed_new_message)), 'constant')
+
+        if len(processed_thread) == 0:
+            print("processed_thread is empty. Using only new_message.")
+            processed_thread = np.array([processed_new_message])
+
+        return processed_thread, processed_new_message
+    except Exception as e:
+        print(f"Error in preprocess_input: {str(e)}")
+        print("new_message causing error:", new_message)
+        print("thread:", thread)
+        raise
+
+def prepare_training_data(room_id):
+    chats = list(chat_collection.find({'room': ObjectId(room_id)}).sort('createdAt', -1).limit(100))
     
-    def get_nickname_embedding(nickname):
-        if nickname not in nickname_map:
-            nickname_map[nickname] = len(nickname_map)
-        return nickname_map[nickname]
+    if len(chats) < 2:
+        raise ValueError(f"Not enough messages in the chat room. Found {len(chats)} messages.")
+
+    X = []
+    y = []
     
-    def get_time_diff_embedding(time1, time2):
-        diff_minutes = abs((time1 - time2).total_seconds()) / 60
-        if diff_minutes <= 1: return 0
-        elif diff_minutes <= 5: return 1
-        elif diff_minutes <= 10: return 2
-        elif diff_minutes <= 30: return 3
-        elif diff_minutes <= 60: return 4
-        elif diff_minutes <= 120: return 5
-        elif diff_minutes <= 240: return 6
-        elif diff_minutes <= 480: return 7
-        elif diff_minutes <= 720: return 8
-        elif diff_minutes <= 1440: return 9
-        else: return 10
+    for i in range(1, len(chats)):
+        thread = chats[:i]
+        new_message = chats[i]
+        
+        thread_processed, new_message_processed = preprocess_input(thread, new_message)
+        
+        max_thread_length = 20
+        if len(thread_processed) > max_thread_length:
+            thread_processed = thread_processed[-max_thread_length:]
+        else:
+            padding = np.zeros((max_thread_length - len(thread_processed), thread_processed.shape[1]))
+            thread_processed = np.vstack((padding, thread_processed))
+        
+        X.append(thread_processed)
+        y.append(new_message_processed)
     
-    current_time = datetime.now()
+    return np.array(X), np.array(y), len(chats), len(chats) - 1
+
+def train_and_save_models(X_train, y_train, catdflow_model, catdmatch_model, epochs=10):
+    catdflow_model.compile(optimizer='adam', loss='mse')
+    catdflow_model.fit(X_train, y_train, epochs=epochs, validation_split=0.2)
+
+    catdmatch_model.compile(optimizer='adam', loss='mse')
+    catdmatch_model.fit(X_train, y_train, epochs=epochs, validation_split=0.2)
+
+    models_dir = os.path.join(os.path.dirname(__file__), 'models')
+    os.makedirs(models_dir, exist_ok=True)
     
-    # thread 전처리
-    processed_thread = []
-    for msg in thread:
-        embedding = get_or_create_embedding(msg['id'], msg['content'])
-        nickname_emb = get_nickname_embedding(msg['nickname']) / len(nickname_map)
-        time_diff = get_time_diff_embedding(datetime.fromisoformat(msg['createdAt']), current_time)
-        processed_thread.append(embedding + [nickname_emb, time_diff / 11])
+    catdflow_model_path = os.path.join(models_dir, 'catdflow_model.keras')
+    catdmatch_model_path = os.path.join(models_dir, 'catdmatch_model.keras')
     
-    # new_message 전처리
-    new_msg_embedding = get_or_create_embedding(new_message['id'], new_message['content'])
-    new_msg_nickname_emb = get_nickname_embedding(new_message['nickname']) / len(nickname_map)
-    processed_new_message = new_msg_embedding + [new_msg_nickname_emb, 0]  # 시간 차이는 0으로 설정
-    
-    return np.array(processed_thread), np.array(processed_new_message)
+    catdflow_model.save(catdflow_model_path)
+    catdmatch_model.save(catdmatch_model_path)
+
+    print(f"Models saved to {models_dir}")
+
+    return catdflow_model, catdmatch_model
+
+def load_or_create_models():
+    models_dir = os.path.join(os.path.dirname(__file__), 'models')
+    catdflow_model_path = os.path.join(models_dir, 'catdflow_model.keras')
+    catdmatch_model_path = os.path.join(models_dir, 'catdmatch_model.keras')
+
+    if os.path.exists(catdflow_model_path) and os.path.exists(catdmatch_model_path):
+        print("Loading existing models...")
+        catdflow_model = keras.models.load_model(catdflow_model_path)
+        catdmatch_model = keras.models.load_model(catdmatch_model_path)
+        print("Models loaded successfully")
+    else:
+        print("Creating new models...")
+        lstm_units = 400
+        catdflow_model = create_catdflow_model(lstm_units, EXPECTED_DIM)
+        catdmatch_model = create_catdmatch_model(EXPECTED_DIM)
+        
+        room_id = '66b0fd658aab9f2bd7a41845'
+        X_train, y_train, total_messages, training_samples = prepare_training_data(room_id)
+        print(f"Total messages in room: {total_messages}")
+        print(f"Training samples prepared: {training_samples}")
+        
+        if training_samples > 0:
+            catdflow_model, catdmatch_model = train_and_save_models(X_train, y_train, catdflow_model, catdmatch_model)
+            print("Models trained and saved successfully")
+        else:
+            print("No training samples could be prepared. Check your data.")
+
+    return catdflow_model, catdmatch_model
 
 def combine_predictions(flow_prediction, match_prediction):
     g = 1 / (1 + np.exp(-match_prediction))
@@ -219,24 +260,52 @@ def combine_predictions(flow_prediction, match_prediction):
 
 @app.route('/predict', methods=['POST'])
 def predict():
-    data = request.json
-    thread = data['thread']
-    new_message = data['new_message']
+    try:
+        data = request.json
+        thread = data['thread']
+        new_message = data['new_message']
 
-    preprocessed_thread, preprocessed_message = preprocess_input(thread, new_message)
+        if not thread:
+            print("Thread is empty. Using only new_message for prediction.")
+            thread = [new_message]
 
-    flow_input = np.concatenate([preprocessed_thread, np.expand_dims(preprocessed_message, 0)], axis=0)
-    flow_input = np.expand_dims(flow_input, 0)
-    flow_prediction = catdflow_model.predict(flow_input).squeeze()
+        if '_id' not in new_message:
+            new_message['_id'] = str(ObjectId())
 
-    match_prediction = catdmatch_model.predict(np.expand_dims(preprocessed_thread, 0))
-    match_prediction = tf.keras.losses.cosine_similarity(match_prediction, np.expand_dims(preprocessed_message, 0)).numpy()
+        try:
+            preprocessed_thread, preprocessed_new_message = preprocess_input(thread, new_message)
+        except Exception as e:
+            print(f"Error in preprocess_input: {str(e)}")
+            return jsonify({'error': str(e)}), 500
 
-    combined_prediction = combine_predictions(flow_prediction, match_prediction)
+        max_thread_length = 20
+        if len(preprocessed_thread) > max_thread_length:
+            preprocessed_thread = preprocessed_thread[-max_thread_length:]
+        elif len(preprocessed_thread) < max_thread_length:
+            padding = np.zeros((max_thread_length - len(preprocessed_thread), preprocessed_thread.shape[1]))
+            preprocessed_thread = np.vstack((preprocessed_thread, padding))
 
-    return jsonify({
-        'prediction': combined_prediction.tolist()
-    })
+        flow_input = np.expand_dims(preprocessed_thread, 0)
+        
+        try:
+            flow_prediction = catdflow_model.predict(flow_input).squeeze()
+            match_prediction = catdmatch_model.predict(flow_input).squeeze()
+        except Exception as e:
+            print(f"Error in model prediction: {str(e)}")
+            return jsonify({'error': str(e)}), 500
+
+        combined_prediction = combine_predictions(flow_prediction, match_prediction)
+
+        return jsonify({
+            'prediction': combined_prediction.tolist()
+        })
+    except Exception as e:
+        print(f"Error in predict: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    catdflow_model, catdmatch_model = load_or_create_models()
+    
+    port = int(os.environ.get('PORT', 5000))
+    print(f"Server started on port {port}")
+    app.run(host='0.0.0.0', port=port)

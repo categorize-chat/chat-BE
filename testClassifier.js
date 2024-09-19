@@ -1,6 +1,5 @@
 require('dotenv').config();
 const mongoose = require('mongoose');
-const axios = require('axios');
 const { spawn } = require('child_process');
 const classifyTopics = require('./services/chatClassifier');
 const chatSchema = require('./schemas/chat');
@@ -30,10 +29,23 @@ try {
 
 function trainModel() {
   return new Promise((resolve, reject) => {
-    const pythonProcess = spawn('python', ['model.py']);
+    const port = Math.floor(Math.random() * (6000 - 5000 + 1)) + 5000;
+    console.log(`Starting Python model server on port ${port}`);
+
+    const pythonProcess = spawn('python3', ['model.py'], {
+      env: { ...process.env, PORT: port.toString() }
+    });
+
+    let output = '';
 
     pythonProcess.stdout.on('data', (data) => {
+      output += data.toString();
       console.log(`Python stdout: ${data}`);
+      if (data.toString().includes("Server started on port")) {
+        console.log(`Model server started on port ${port}`);
+        clearTimeout(timeoutId);
+        resolve(port);
+      }
     });
 
     pythonProcess.stderr.on('data', (data) => {
@@ -41,14 +53,18 @@ function trainModel() {
     });
 
     pythonProcess.on('close', (code) => {
-      if (code === 0) {
-        console.log('Model training completed successfully');
-        resolve();
-      } else {
+      if (code !== 0) {
         console.error(`Model training process exited with code ${code}`);
+        clearTimeout(timeoutId);
         reject(new Error(`Model training failed with code ${code}`));
       }
     });
+
+    const timeoutId = setTimeout(() => {
+      console.error('Python process timed out');
+      pythonProcess.kill();
+      reject(new Error('Python process timed out'));
+    }, 300000); // 5분 타임아웃
   });
 }
 
@@ -57,11 +73,14 @@ async function testClassifier(roomId) {
   console.log(`Starting classification for room: ${roomId} at ${startTime.toISOString()}`);
 
   try {
+    console.log('Step 1: Connecting to MongoDB');
     await connectToMongoDB();
+    console.log('MongoDB connection established');
 
     const objectIdRoomId = new mongoose.Types.ObjectId(roomId);
 
-    const chats = await Chat.find({ room: objectIdRoomId }).sort('createdAt');
+    console.log('Step 2: Fetching chats from the database');
+    const chats = await Chat.find({ room: objectIdRoomId }).sort('createdAt').limit(10);
     console.log(`Found ${chats.length} chats for the room at ${new Date().toISOString()}`);
 
     if (chats.length === 0) {
@@ -70,15 +89,15 @@ async function testClassifier(roomId) {
     }
 
     console.log('Sample chats:');
-    chats.slice(0, 3).forEach(chat => {
+    chats.forEach(chat => {
       console.log(`${chat.nickname}: ${chat.content}`);
     });
 
-    console.log('Starting model training...');
-    await trainModel();
-    console.log('Model training completed');
+    console.log('Step 3: Starting model training and server');
+    const port = await trainModel();
+    console.log(`Model server started on port ${port}`);
 
-    console.log(`Starting classification at ${new Date().toISOString()}`);
+    console.log(`Step 4: Starting classification at ${new Date().toISOString()}`);
     const result = await classifyTopics(objectIdRoomId);
     console.log(`Classification completed at ${new Date().toISOString()}`);
 
@@ -100,6 +119,7 @@ async function testClassifier(roomId) {
   } catch (error) {
     console.error('Error during classification:', error);
   } finally {
+    console.log('Step 5: Disconnecting from MongoDB');
     await mongoose.disconnect();
     console.log(`Disconnected from MongoDB at ${new Date().toISOString()}`);
   }
