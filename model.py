@@ -1,4 +1,5 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
+import json
 import tensorflow as tf
 from tensorflow import keras
 import numpy as np
@@ -11,13 +12,14 @@ from bson import ObjectId
 from dateutil import parser
 from sklearn.metrics.pairwise import cosine_similarity
 from collections import Counter
-from sklearn.cluster import DBSCAN
 from sklearn.metrics import accuracy_score, classification_report
 
+# .env 파일 로드
 load_dotenv()
 
 app = Flask(__name__)
 
+# MongoDB 연결
 mongodb_uri = os.getenv('MONGODB_URI')
 if not mongodb_uri or not mongodb_uri.startswith(('mongodb://', 'mongodb+srv://')):
     raise ValueError("Invalid MONGODB_URI. It must start with 'mongodb://' or 'mongodb+srv://'")
@@ -26,8 +28,10 @@ client = MongoClient(mongodb_uri)
 db = client.get_database()
 chat_collection = db['chats']
 
+# OpenAI 클라이언트 초기화
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+# 전역 변수 설정
 EMBEDDING_DIM = 1536
 USER_EMB_DIM = 64
 TIME_EMB_DIM = 64
@@ -36,46 +40,72 @@ EXPECTED_DIM = EMBEDDING_DIM + ADDITIONAL_FEATURES
 INITIAL_NUM_CLASSES = 5
 BATCH_SIZE = 32
 MAX_THREAD_LENGTH = 20
-SIMILARITY_THRESHOLD = 0.35  # 임계값 낮춤
-MAX_THREADS = 7  # 최대 토픽 수 증가
-CONTEXT_WINDOW = 5  # 컨텍스트 윈도우 크기
+SIMILARITY_THRESHOLD = 0.3
+MAX_THREADS = 15
 
 embedding_cache = {}
 
-class EnhancedDynamicClassifier(keras.Model):
-    def __init__(self, lstm_units, output_dim, initial_num_classes, dropout_rate=0.5):
-        super(EnhancedDynamicClassifier, self).__init__()
-        self.text_embedding_layer = keras.layers.Dense(EMBEDDING_DIM, activation='relu')
+class ImprovedCATD(keras.Model):
+    def __init__(self, lstm_units=256, attention_units=128, output_dim=EXPECTED_DIM, initial_num_classes=INITIAL_NUM_CLASSES, dropout_rate=0.5):
+        super(ImprovedCATD, self).__init__()
+        self.lstm_units = lstm_units
+        self.attention_units = attention_units
+
         self.user_embedding_layer = keras.layers.Embedding(input_dim=1000, output_dim=USER_EMB_DIM)
         self.time_embedding_layer = keras.layers.Dense(TIME_EMB_DIM, activation='relu')
         
-        self.lstm1 = keras.layers.LSTM(lstm_units, return_sequences=True)
-        self.lstm2 = keras.layers.LSTM(lstm_units, return_sequences=True)
-        self.attention = keras.layers.MultiHeadAttention(num_heads=8, key_dim=lstm_units)
-        self.flatten = keras.layers.Flatten()
-        self.dropout1 = keras.layers.Dropout(dropout_rate)
+        self.thread_dense = keras.layers.Dense(self.lstm_units, activation='relu')
+        self.thread_lstm = keras.layers.LSTM(self.lstm_units, return_sequences=True)
+        
+        self.message_dense = keras.layers.Dense(self.lstm_units, activation='relu')
+        
+        # Add these layers to adjust dimensions for attention
+        self.thread_attention_dense = keras.layers.Dense(self.attention_units, activation='relu')
+        self.message_attention_dense = keras.layers.Dense(self.attention_units, activation='relu')
+        self.time_attention_dense = keras.layers.Dense(self.attention_units, activation='relu')
+        
+        self.attention = keras.layers.Attention()
+        self.time_attention = keras.layers.Attention()
+        self.normalization = keras.layers.LayerNormalization()
+        
         self.dense1 = keras.layers.Dense(output_dim, activation='relu')
-        self.dropout2 = keras.layers.Dropout(dropout_rate)
-        self.dense2 = keras.layers.Dense(output_dim // 2, activation='relu')
+        self.dropout = keras.layers.Dropout(dropout_rate)
         self.classifier = keras.layers.Dense(initial_num_classes, activation='softmax')
 
     def call(self, inputs, training=False):
-        text_emb, user_ids, time_diffs = inputs
+        thread, message, user_ids, time_diffs = inputs
         
-        user_emb = self.user_embedding_layer(user_ids)
-        time_diffs_expanded = tf.expand_dims(time_diffs, -1)
-        time_emb = self.time_embedding_layer(time_diffs_expanded)
+        # Thread processing
+        thread_processed = self.thread_dense(thread)
+        user_emb_thread = self.user_embedding_layer(user_ids)
+        time_emb_thread = self.time_embedding_layer(time_diffs)
         
-        combined_emb = tf.concat([text_emb, user_emb, time_emb], axis=-1)
+        combined_thread = tf.concat([thread_processed, user_emb_thread, time_emb_thread], axis=-1)
+        thread_output = self.thread_lstm(combined_thread)
         
-        x = self.lstm1(combined_emb)
-        x = self.lstm2(x)
-        x = self.attention(x, x)
-        x = self.flatten(x)
-        x = self.dropout1(x, training=training)
-        x = self.dense1(x)
-        x = self.dropout2(x, training=training)
-        x = self.dense2(x)
+        # Message processing
+        message_output = self.message_dense(message)
+        message_output = tf.expand_dims(message_output, 1)
+        
+        # Adjust dimensions for attention
+        thread_attention = self.thread_attention_dense(thread_output)
+        message_attention = self.message_attention_dense(message_output)
+        time_attention = self.time_attention_dense(time_emb_thread)
+        
+        # Attention
+        context_vector = self.attention([message_attention, thread_attention])
+        
+        # Time attention
+        time_context = self.time_attention([message_attention, time_attention])
+        
+        # Combine context vectors
+        combined_context = tf.concat([context_vector, time_context], axis=-1)
+        combined_context = tf.squeeze(combined_context, 1)
+        
+        # Normalization and final layers
+        normalized = self.normalization(combined_context)
+        x = self.dense1(normalized)
+        x = self.dropout(x, training=training)
         return self.classifier(x)
 
     def expand_classifier(self, new_num_classes):
@@ -100,157 +130,132 @@ def get_or_create_embedding(chat_id, content):
             chat_collection.update_one({"_id": chat_id}, {"$set": {"embedding": embedding}}, upsert=True)
         except Exception as e:
             print(f"Error creating embedding: {str(e)}")
-            embedding = np.random.rand(EMBEDDING_DIM)
+            embedding = np.random.rand(EMBEDDING_DIM)  # 임시 대체 임베딩
     
     embedding_cache[chat_id] = embedding
     return embedding
 
 def safe_int_convert(value, default=1):
     try:
-        return int(float(value))
+        return int(float(value))  # float로 변환 후 int로 변환
     except (ValueError, TypeError):
         return default
+    
+def get_normalized_topic(original_topic):
+    return safe_int_convert(original_topic, default=-1)
 
-def assign_topics(room_id):
+def assign_topics(room_id, max_topics=MAX_THREADS, min_topic_size=2):
     print("Starting assign_topics function")
     
     chats = list(chat_collection.find({'room': ObjectId(room_id)}).sort('createdAt', 1))
-    predicted_topics = {}
-    topic_embeddings = []
-    
+    topics = []
+    current_topic = []
+    topic_mapping = {}
+
     for i, chat in enumerate(chats):
         chat_id = chat['_id']
-        try:
-            embedding = get_or_create_embedding(chat_id, chat['content'])
-            
-            print(f"Chat {i}: Content: {chat['content'][:50]}...")
-            
-            if not topic_embeddings:
-                predicted_topic = 1
-                print(f"Chat {i}: First message, assigned to topic {predicted_topic}")
-            else:
-                # 컨텍스트 윈도우 적용
-                context_embeddings = topic_embeddings[-CONTEXT_WINDOW:]
-                similarities = cosine_similarity([embedding], context_embeddings)[0]
-                max_similarity = np.max(similarities)
-                
-                if max_similarity >= SIMILARITY_THRESHOLD:
-                    predicted_topic = predicted_topics[list(predicted_topics.keys())[-1]]
-                    print(f"Chat {i}: High similarity ({max_similarity:.4f}), assigned to existing topic {predicted_topic}")
-                else:
-                    if len(set(predicted_topics.values())) < MAX_THREADS:
-                        predicted_topic = len(set(predicted_topics.values())) + 1
-                        print(f"Chat {i}: Low similarity ({max_similarity:.4f}), created new topic {predicted_topic}")
-                    else:
-                        # DBSCAN 클러스터링 적용
-                        clusterer = DBSCAN(eps=0.5, min_samples=2)
-                        cluster_labels = clusterer.fit_predict(np.array(topic_embeddings))
-                        if -1 in cluster_labels:  # 새로운 클러스터 생성
-                            predicted_topic = len(set(cluster_labels)) + 1
-                        else:
-                            predicted_topic = cluster_labels[-1] + 1
-                        print(f"Chat {i}: Low similarity ({max_similarity:.4f}), assigned to topic {predicted_topic} based on clustering")
-            
-            predicted_topic = min(safe_int_convert(predicted_topic), MAX_THREADS)
-            predicted_topics[str(chat_id)] = predicted_topic
-            topic_embeddings.append(embedding)
-            
-            print(f"Current unique topics: {set(predicted_topics.values())}")
-            print(f"Assigned topic: {predicted_topic}")
-            
-            if (i + 1) % 100 == 0:
-                print(f"Processed {i + 1}/{len(chats)} chats")
-                print(f"Current topic distribution: {Counter(predicted_topics.values())}")
-        
-        except Exception as e:
-            print(f"Error processing chat {i}: {str(e)}")
-            continue
-    
-    # 토픽 병합 및 분할
-    merge_and_split_topics(predicted_topics, topic_embeddings)
-    
-    print(f"Assigned topics to {len(predicted_topics)} messages")
-    print(f"Final topic distribution: {Counter(predicted_topics.values())}")
-    return predicted_topics
+        content = chat['content']
 
-def merge_and_split_topics(predicted_topics, topic_embeddings):
-    # 토픽 병합
-    topic_centroids = {}
-    for topic, embedding in zip(predicted_topics.values(), topic_embeddings):
-        if topic not in topic_centroids:
-            topic_centroids[topic] = []
-        topic_centroids[topic].append(embedding)
+        print(f"Processing chat {i}: Content: {content[:50]}...")
+
+        embedding = get_or_create_embedding(chat_id, content)
+        
+        if not current_topic:
+            current_topic.append((chat_id, embedding))
+            topic_mapping[str(chat_id)] = 1  # Start with topic 1
+            print(f"Chat {i}: First message in new topic 1")
+        else:
+            similarities = [cosine_similarity([embedding], [e])[0][0] for _, e in current_topic]
+            max_similarity = max(similarities)
+            
+            if max_similarity < SIMILARITY_THRESHOLD and len(topics) < max_topics - 1:
+                if len(current_topic) >= min_topic_size:
+                    topics.append(current_topic)
+                    current_topic = [(chat_id, embedding)]
+                    topic_mapping[str(chat_id)] = len(topics) + 1
+                    print(f"Chat {i}: Low similarity ({max_similarity:.4f}), created new topic {len(topics) + 1}")
+                else:
+                    topic_mapping[str(chat_id)] = 0  # 아무 토픽에도 속하지 않는 메시지는 0으로 표시
+                    print(f"Chat {i}: Low similarity but current topic too small, assigned 0")
+            else:
+                current_topic.append((chat_id, embedding))
+                topic_mapping[str(chat_id)] = len(topics) + 1
+                print(f"Chat {i}: High similarity or max topics reached, assigned to existing topic {len(topics) + 1}")
+
+        print(f"Current unique topics: {set(topic_mapping.values())}")
+        print(f"Assigned topic: {topic_mapping[str(chat_id)]}")
+        
+        if (i + 1) % 100 == 0:
+            print(f"Processed {i + 1}/{len(chats)} chats")
+            print(f"Current topic distribution: {Counter(topic_mapping.values())}")
+
+    if current_topic and len(current_topic) >= min_topic_size:
+        topics.append(current_topic)
+    elif current_topic:
+        for chat_id, _ in current_topic:
+            topic_mapping[str(chat_id)] = 0
+
+    print(f"Assigned topics to {len(topic_mapping)} messages")
+    print(f"Final topic distribution: {Counter(topic_mapping.values())}")
     
-    for topic, embeddings in topic_centroids.items():
-        centroid = np.mean(embeddings, axis=0)
-        topic_centroids[topic] = centroid
-    
-    merged_topics = {}
-    for topic1, centroid1 in topic_centroids.items():
-        for topic2, centroid2 in topic_centroids.items():
-            if topic1 < topic2:
-                similarity = cosine_similarity([centroid1], [centroid2])[0][0]
-                if similarity > 0.8:  # 높은 유사도를 가진 토픽 병합
-                    merged_topics[topic2] = topic1
-    
-    # 토픽 분할
-    for topic, embeddings in topic_centroids.items():
-        if len(embeddings) > 100:  # 큰 토픽 분할
-            clusterer = DBSCAN(eps=0.3, min_samples=5)
-            sub_labels = clusterer.fit_predict(embeddings)
-            for i, (chat_id, old_topic) in enumerate(predicted_topics.items()):
-                if old_topic == topic:
-                    predicted_topics[chat_id] = f"{topic}-{sub_labels[i]}"
-    
-    # 병합된 토픽 적용
-    for chat_id, topic in predicted_topics.items():
-        if topic in merged_topics:
-            predicted_topics[chat_id] = merged_topics[topic]
+    return topic_mapping
 
 def preprocess_input(thread, new_message=None):
     nickname_map = {}
-    current_time = datetime.now(timezone.utc)
     
     def get_nickname_id(nickname):
         if nickname not in nickname_map:
             nickname_map[nickname] = len(nickname_map)
         return nickname_map[nickname]
     
-    def get_time_diff(msg_time):
-        diff_minutes = abs((current_time - msg_time).total_seconds()) / 60
-        return min(diff_minutes / 1440, 1)  # Normalize to [0, 1] with max of 24 hours
+    def get_time_diff(current_time, thread_time):
+        diff_minutes = abs((current_time - thread_time).total_seconds()) / 60
+        return min(diff_minutes / 30, 1)  # Normalize to [0, 1] with max of 24 hours
     
     processed_thread = []
     user_ids = []
     time_diffs = []
     
     full_thread = thread + [new_message] if new_message else thread
+    full_thread = full_thread[-MAX_THREAD_LENGTH:]  # Consider only the last MAX_THREAD_LENGTH messages
     
-    for msg in full_thread[-MAX_THREAD_LENGTH:]:
-        msg_id = msg.get('id') or msg.get('_id')
-        embedding = get_or_create_embedding(msg_id, msg['content'])
-        user_id = get_nickname_id(msg['nickname'])
-        msg_time = msg['createdAt'] if isinstance(msg['createdAt'], datetime) else parser.isoparse(msg['createdAt'])
-        time_diff = get_time_diff(msg_time.replace(tzinfo=timezone.utc))
+    for i, current_msg in enumerate(full_thread):
+        msg_id = current_msg.get('id') or current_msg.get('_id')
+        embedding = get_or_create_embedding(msg_id, current_msg['content'])
+        user_id = get_nickname_id(current_msg['nickname'])
+        current_time = current_msg['createdAt'] if isinstance(current_msg['createdAt'], datetime) else parser.isoparse(current_msg['createdAt'])
+        
+        # Calculate time differences with all previous messages in the thread
+        msg_time_diffs = []
+        for prev_msg in full_thread[:i]:
+            prev_time = prev_msg['createdAt'] if isinstance(prev_msg['createdAt'], datetime) else parser.isoparse(prev_msg['createdAt'])
+            msg_time_diffs.append(get_time_diff(current_time, prev_time))
+        
+        # Pad time_diffs if necessary
+        msg_time_diffs = [0.0] * (MAX_THREAD_LENGTH - 1 - len(msg_time_diffs)) + msg_time_diffs
         
         processed_thread.append(embedding)
         user_ids.append(user_id)
-        time_diffs.append(time_diff)
+        time_diffs.append(msg_time_diffs)
     
-    if len(processed_thread) < MAX_THREAD_LENGTH:
-        padding_length = MAX_THREAD_LENGTH - len(processed_thread)
-        processed_thread = [[0.0] * EMBEDDING_DIM] * padding_length + processed_thread
-        user_ids = [0] * padding_length + user_ids
-        time_diffs = [0.0] * padding_length + time_diffs
+    # Padding for the entire thread if necessary
+    while len(processed_thread) < MAX_THREAD_LENGTH:
+        processed_thread.append([0.0] * EMBEDDING_DIM)
+        user_ids.append(0)
+        time_diffs.append([0.0] * (MAX_THREAD_LENGTH - 1))
     
-    return np.array(processed_thread), np.array(user_ids), np.array(time_diffs)
+    time_diffs = np.array(time_diffs)
+    if time_diffs.ndim == 3:
+        time_diffs = time_diffs.mean(axis=2)  # 마지막 차원의 평균을 취합니다
+
+    return np.array(processed_thread), np.array(user_ids), time_diffs
 
 def data_generator(room_id, batch_size=BATCH_SIZE):
     chats = chat_collection.find({'room': ObjectId(room_id)}).sort('createdAt', 1)
     total_chats = chat_collection.count_documents({'room': ObjectId(room_id)})
     
-    batch_x_text, batch_x_user, batch_x_time, batch_y = [], [], [], []
-    topic_to_index = {i+1: i for i in range(MAX_THREADS)}
+    batch_thread, batch_message, batch_user, batch_time, batch_y = [], [], [], [], []
+    topic_to_index = {i: i for i in range(MAX_THREADS)}
     
     for i, chat in enumerate(chats):
         if i == 0:
@@ -260,18 +265,21 @@ def data_generator(room_id, batch_size=BATCH_SIZE):
         thread.reverse()
         
         try:
-            x_text, x_user, x_time = preprocess_input(thread, chat)
-            topic = min(int(chat.get('topic', 1)), MAX_THREADS)
+            thread_embed, user_ids, time_diffs = preprocess_input(thread, chat)
+            message_embed = get_or_create_embedding(chat['_id'], chat['content'])
+            
+            topic = min(max(int(chat.get('topic', 0)), 0), MAX_THREADS - 1)
             y = topic_to_index[topic]
             
-            batch_x_text.append(x_text)
-            batch_x_user.append(x_user)
-            batch_x_time.append(x_time)
+            batch_thread.append(thread_embed)
+            batch_message.append(message_embed)
+            batch_user.append(user_ids)
+            batch_time.append(time_diffs)
             batch_y.append(y)
             
-            if len(batch_x_text) == batch_size:
-                yield [np.array(batch_x_text), np.array(batch_x_user), np.array(batch_x_time)], np.array(batch_y)
-                batch_x_text, batch_x_user, batch_x_time, batch_y = [], [], [], []
+            if len(batch_thread) == batch_size:
+                yield [np.array(batch_thread), np.array(batch_message), np.array(batch_user), np.array(batch_time)], np.array(batch_y)
+                batch_thread, batch_message, batch_user, batch_time, batch_y = [], [], [], [], []
         
         except Exception as e:
             print(f"Error processing chat {i}: {str(e)}")
@@ -279,17 +287,14 @@ def data_generator(room_id, batch_size=BATCH_SIZE):
         if i % 100 == 0:
             print(f"Processed {i}/{total_chats} chats...")
     
-    if batch_x_text:
-        yield [np.array(batch_x_text), np.array(batch_x_user), np.array(batch_x_time)], np.array(batch_y)
-    
-    print(f"Total unique topics: {len(topic_to_index)}")
-    print(f"Topic to index mapping: {topic_to_index}")
+    if batch_thread:
+        yield [np.array(batch_thread), np.array(batch_message), np.array(batch_user), np.array(batch_time)], np.array(batch_y)  
 
 def train_model(room_id, epochs=10):
-    print("Starting enhanced model training...")
-    num_classes = MAX_THREADS
+    print("Starting improved model training...")
+    num_classes = MAX_THREADS  # 클래스 수를 MAX_THREADS로 설정
     
-    model = EnhancedDynamicClassifier(lstm_units=128, output_dim=EXPECTED_DIM, initial_num_classes=num_classes, dropout_rate=0.5)
+    model = ImprovedCATD(lstm_units=128, output_dim=EXPECTED_DIM, initial_num_classes=num_classes, dropout_rate=0.5)
     
     lr_schedule = keras.optimizers.schedules.ExponentialDecay(
         initial_learning_rate=1e-3,
@@ -309,13 +314,13 @@ def train_model(room_id, epochs=10):
         generator = data_generator(room_id)
         model.fit(generator, steps_per_epoch=steps_per_epoch, epochs=1, verbose=1)
     
-    print("Enhanced model training completed")
+    print("Improved model training completed")
     return model
 
 def save_model(model):
     models_dir = os.path.join(os.path.dirname(__file__), 'models')
     os.makedirs(models_dir, exist_ok=True)
-    model_path = os.path.join(models_dir, 'enhanced_dynamic_classifier_model.keras')
+    model_path = os.path.join(models_dir, 'improved_catd_model.keras')
     model.save(model_path)
     print(f"Model saved to {model_path}")
 
@@ -333,7 +338,7 @@ def evaluate_predictions(true_topics, predicted_topics):
     return accuracy, report
 
 # 모델 초기화
-model = EnhancedDynamicClassifier(lstm_units=128, output_dim=EXPECTED_DIM, initial_num_classes=INITIAL_NUM_CLASSES)
+model = ImprovedCATD(lstm_units=256, attention_units=128, output_dim=EXPECTED_DIM, initial_num_classes=MAX_THREADS)
 
 @app.route('/predict', methods=['POST'])
 def predict():
@@ -349,54 +354,41 @@ def predict():
         if chat_count == 0:
             return jsonify({'error': 'No chat messages found for this room'}), 404
         
-        original_topics = {str(chat['_id']): safe_int_convert(chat.get('topic', -1)) for chat in chat_collection.find({'room': ObjectId(room_id)})}
+        chats = list(chat_collection.find({'room': ObjectId(room_id)}).sort('createdAt', 1))
+        result = []
         
-        predicted_topics = assign_topics(room_id)
+        for i, chat in enumerate(chats[1:]):  # Skip the first message
+            thread = chats[:i+1]
+            thread_embed, user_ids, time_diffs = preprocess_input(thread[:-1], chat)
+            message_embed = get_or_create_embedding(chat['_id'], chat['content'])
+            
+            inputs = [
+                np.expand_dims(thread_embed, 0),
+                np.expand_dims(message_embed, 0),
+                np.expand_dims(user_ids, 0),
+                np.expand_dims(time_diffs, 0)
+            ]
+            
+            prediction = model.predict(inputs)
+            predicted_topic = int(np.argmax(prediction[0]))
+            
+            result.append({
+                'content': chat['content'],
+                'predicted_topic': predicted_topic
+            })
         
-        accuracy, report = evaluate_predictions(original_topics, predicted_topics)
-        
-        topic_distribution = Counter(predicted_topics.values())
-        total_messages = len(predicted_topics)
-        
-        result = {
-            'predicted_class': int(max(topic_distribution, key=topic_distribution.get)),
-            'max_probability': float(max(topic_distribution.values()) / total_messages),
-            'top_3_predictions': [
-                {"class": int(cls), "probability": float(count / total_messages)}
-                for cls, count in topic_distribution.most_common(3)
-            ],
-            'all_probabilities': [float(topic_distribution.get(i, 0) / total_messages) for i in range(1, MAX_THREADS + 1)],
-            'message_count': int(total_messages),
-            'topics': [int(t) for t in predicted_topics.values()],
-            'accuracy': float(accuracy),
-            'classification_report': report
-        }
-        
-        return jsonify(result)
+        return Response(json.dumps(result, ensure_ascii=False), mimetype='application/json')
     except Exception as e:
         print(f"Error in predict: {str(e)}")
         import traceback
         traceback.print_exc()   
         return jsonify({'error': str(e)}), 500
 
-def normalize_database_topics(room_id):
-    for chat in chat_collection.find({'room': ObjectId(room_id)}):
-        original_topic = chat.get('topic')
-        if original_topic is not None:
-            normalized_topic = safe_int_convert(original_topic, default=-1)
-            if normalized_topic != original_topic:
-                chat_collection.update_one(
-                    {'_id': chat['_id']},
-                    {'$set': {'topic': normalized_topic}}
-                )
-                print(f"Updated topic for chat {chat['_id']}: {original_topic} -> {normalized_topic}")
-
 if __name__ == '__main__':
-    print("Starting enhanced CATD-COMBINE with new topic assignment...")
-    room_id = '66b0fd658aab9f2bd7a41845'  # 여기에 실제 사용할 room_id를 입력하세요
+    print("Starting improved CATD model...")
+    room_id = '66b0fd658aab9f2bd7a41841'
     
     try:
-        normalize_database_topics(room_id)
         model = train_model(room_id)
         save_model(model)
         
