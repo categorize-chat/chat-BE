@@ -44,6 +44,10 @@ TIME_WINDOW_MINUTES = 5  # 최대 가중치를 갖는 시간 범위 (분)
 # 무의미한 채팅을 필터링하기 위한 정규 표현식 패턴
 MEANINGLESS_CHAT_PATTERN = re.compile(r'^([ㄱ-ㅎㅏ-ㅣ]+|[ㅋㅎㄷ]+|[ㅠㅜ]+|[.]+|[~]+|[!]+|[?]+)+$')
 
+# 채팅 그룹 전역 변수 설정
+CHATS_PER_GROUP = 100
+CURRENT_GROUP = 4
+
 class NSP:
     def __init__(self, tokenizer, model, device):
         self.tokenizer = tokenizer
@@ -93,12 +97,28 @@ def is_meaningful_chat(content):
     
     return True
 
+def get_chat_group(room_id):
+    total_chats = chat_collection.count_documents({'room': ObjectId(room_id)})
+    start_index = (CURRENT_GROUP - 1) * CHATS_PER_GROUP
+    end_index = min(start_index + CHATS_PER_GROUP, total_chats)
+    
+    chats = list(chat_collection.find({'room': ObjectId(room_id)})
+                 .sort('createdAt', 1)
+                 .skip(start_index)
+                 .limit(CHATS_PER_GROUP))
+    
+    return chats, start_index, end_index
+
 def assign_topics(room_id, max_topics=MAX_THREADS):
-    chats = list(chat_collection.find({'room': ObjectId(room_id)}).sort('createdAt', 1))
+    chats, start_index, end_index = get_chat_group(room_id)
+    
+    if not chats:
+        return {}, []
+    
     topics = [[chats[0]['content']]]
     topic_mapping = {str(chats[0]['_id']): 0}
     topic_times = [chats[0]['createdAt']]
-    last_speaker_info = {chats[0]['nickname']: (chats[0]['createdAt'], 0)}  # (마지막 채팅 시간, 마지막 토픽)
+    last_speaker_info = {chats[0]['nickname']: (chats[0]['createdAt'], 0)}
     
     nsp_model = NSP(tokenizer, model, device)
     
@@ -108,26 +128,24 @@ def assign_topics(room_id, max_topics=MAX_THREADS):
         current_time = chat['createdAt']
         current_speaker = chat['nickname']
 
-        # 무의미한 채팅 스킵
         if not is_meaningful_chat(content):
-            print(f"Chat {i+1}: Skipped (meaningless): {content}")
-            topic_mapping[chat_id] = -1  # -1은 스킵된 메시지를 나타냄
+            print(f"Chat {start_index + i + 1}: Skipped (meaningless): {content}")
+            print()
+            topic_mapping[chat_id] = -1
             continue
 
-        print(f"Chat {i+1}: Content: {content}")
+        print(f"Chat {start_index + i + 1}: Content: {content}")
         
-        # 같은 화자의 이전 채팅 확인
         if current_speaker in last_speaker_info:
             last_time, last_topic = last_speaker_info[current_speaker]
             if (current_time - last_time).total_seconds() <= 60:
                 assigned_topic = last_topic
-                print(f"Chat {i+1}: Same speaker within 1 minute, assigned to topic {assigned_topic + 1}")
+                print(f"Chat {start_index + i + 1}: Same speaker within 1 minute, assigned to topic {assigned_topic + 1}")
             else:
                 assigned_topic = assign_topic_with_nsp(nsp_model, topics, content, current_time, topic_times)
         else:
             assigned_topic = assign_topic_with_nsp(nsp_model, topics, content, current_time, topic_times)
         
-        # 토픽 할당
         if assigned_topic >= len(topics):
             topics.append([content])
             topic_times.append(current_time)
@@ -138,14 +156,12 @@ def assign_topics(room_id, max_topics=MAX_THREADS):
             topic_times[assigned_topic] = current_time
         
         topic_mapping[chat_id] = assigned_topic
-        
-        # 화자 정보 업데이트
         last_speaker_info[current_speaker] = (current_time, assigned_topic)
         
-        print(f"Chat {i+1}: Assigned to topic {assigned_topic + 1}")
-        print()  # 각 채팅 처리 후 빈 줄 출력
+        print(f"Chat {start_index + i + 1}: Assigned to topic {assigned_topic + 1}")
+        print()
     
-    return topic_mapping
+    return topic_mapping, chats
 
 def assign_topic_with_nsp(nsp_model, topics, content, current_time, topic_times):
     thread_contents = [" ".join(topic[-MAX_TOPIC_MESSAGES:]) for topic in topics]
