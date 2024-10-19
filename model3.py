@@ -41,12 +41,12 @@ sbert_model.to(device)
 # 전역 변수 설정
 MAX_THREADS = 15
 MAX_TOPIC_LENGTH = 100
-COMBINED_THRESHOLD = 0.7 # 결합된 점수의 임계값
+COMBINED_THRESHOLD = 0.67 # 결합된 점수의 임계값
 MAX_TOPIC_MESSAGES = 10
 TIME_WEIGHT_FACTOR = 0.5
 MAX_TIME_WEIGHT = 0.2
 TIME_WINDOW_MINUTES = 4
-THREAD_TIMEOUT = timedelta(hours=1)
+THREAD_TIMEOUT = timedelta(hours=1.5)
 MEANINGLESS_CHAT_PATTERN = re.compile(r'^([ㄱ-ㅎㅏ-ㅣ]+|[ㅋㅎㄷ]+|[ㅠㅜ]+|[.]+|[~]+|[!]+|[?]+)+$')
 CHATS_PER_GROUP = 100
 CURRENT_GROUP = 1
@@ -99,7 +99,7 @@ def get_chat_group(room_id):
     end_index = min(start_index + CHATS_PER_GROUP, total_chats)
     
     chats = list(chat_collection.find({'room': ObjectId(room_id)})
-                 .sort('createdAt', 1)
+                 .sort('_id', 1)
                  .skip(start_index)
                  .limit(CHATS_PER_GROUP))
     
@@ -275,7 +275,7 @@ if __name__ == '__main__':
     
     try:
         # 테스트를 위한 room_id 설정
-        room_id = '66b0fd658aab9f2bd7a41842'  # 실제 사용할 room_id로 변경하세요
+        room_id = '67136ffb5eb50f0647636104'  # 실제 사용할 room_id로 변경하세요
         
         print(f"Room ID: {room_id}")
         print(f"Combined Threshold: {COMBINED_THRESHOLD}")
@@ -291,16 +291,7 @@ if __name__ == '__main__':
             print('No chat messages found for this room')
         else:
             topic_mapping, chats, topics = assign_topics(room_id)
-            
-            print("\nResults:")
-            for chat in chats:
-                chat_id = str(chat['_id'])
-                predicted_topic = int(topic_mapping.get(chat_id, -1))
-                print(f"Chat: {chat['content']}")
-                print(f"Predicted Topic: {predicted_topic}")
-                if predicted_topic >= 0 and predicted_topic < len(topics):
-                    print(f"Thread Content: {topics[predicted_topic]}")
-                print()
+            print()
 
         port = int(os.environ.get('PORT', 5000))
         print(f"Server started on port {port}")
