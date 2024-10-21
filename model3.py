@@ -3,6 +3,10 @@ from flask import Flask, request, jsonify
 import json
 import tensorflow as tf
 import os
+import openai
+from openai import OpenAI
+import asyncio
+from quart import Quart, request, jsonify
 from pymongo import MongoClient
 from dotenv import load_dotenv
 from bson import ObjectId
@@ -16,6 +20,7 @@ from datetime import datetime, timedelta
 
 # .env 파일 로드
 load_dotenv()
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 app = Flask(__name__)
 
@@ -73,6 +78,20 @@ class NSP:
         prob = torch.max(probs, dim=-1).values
 
         return is_same_class, prob
+
+async def summarize_chats(content):
+    try:
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "주어진 채팅 내용을 간략하게 요약해주세요. 주요 주제와 핵심 포인트만 언급해주세요."},
+                {"role": "user", "content": content}
+            ]
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"Error in summarizing chats: {str(e)}")
+        return "요약을 생성하는 중 오류가 발생했습니다."
 
 def calculate_time_weight(current_time, thread_time):
     time_diff = (current_time - thread_time).total_seconds() / 60
@@ -171,11 +190,11 @@ def assign_topic_with_combined_model(nsp_model, topics, content, current_time, t
     
     return assigned_topic
 
-def assign_topics(room_id, max_topics=MAX_THREADS):
+async def assign_topics(room_id, max_topics=MAX_THREADS):
     chats, start_index, end_index = get_chat_group(room_id)
     
     if not chats:
-        return {}, [], []
+        return {}, [], [], {}
 
     combined_chats = combine_consecutive_chats(chats)
     
@@ -229,8 +248,16 @@ def assign_topics(room_id, max_topics=MAX_THREADS):
         print(f"Thread content for topic {assigned_topic + 1}:")
         print("\n".join(topics[assigned_topic]))
         print()
-    
-    return topic_mapping, chats, topics
+
+    # 요약 생성
+    topic_summaries = {}
+    for topic_id, topic_content in enumerate(topics):
+        if len(topic_content) >= 5:  # 채팅이 5개 이상인 토픽만 요약
+            content = "\n".join(topic_content)
+            summary = await summarize_chats(content)
+            topic_summaries[topic_id] = summary
+
+    return topic_mapping, chats, topics, topic_summaries
 
 @app.route('/predict', methods=['POST'])
 def predict():
@@ -251,18 +278,29 @@ def predict():
         if chat_count == 0:
             return jsonify({'error': 'No chat messages found for this room'}), 404
         
-        topic_mapping, chats, topics = assign_topics(room_id)
+        topic_mapping, chats, topics, topic_summaries = assign_topics(room_id)
+        
+        # Count the number of chats in each topic
+        topic_chat_counts = {}
+        for chat_id, topic in topic_mapping.items():
+            if topic not in topic_chat_counts:
+                topic_chat_counts[topic] = 0
+            topic_chat_counts[topic] += 1
         
         result = []
         
         for chat in chats:
             chat_id = str(chat['_id'])
             predicted_topic = int(topic_mapping.get(chat_id, -1))
-            result.append({
-                'content': chat['content'],
-                'predicted_topic': predicted_topic,
-                'thread_content': topics[predicted_topic] if predicted_topic >= 0 and predicted_topic < len(topics) else []
-            })
+            
+            # Skip chats from topics with less than 5 messages
+            if topic_chat_counts.get(predicted_topic, 0) >= 5:
+                result.append({
+                    'content': chat['content'],
+                    'predicted_topic': predicted_topic,
+                    'thread_content': topics[predicted_topic] if predicted_topic >= 0 and predicted_topic < len(topics) else [],
+                    'topic_summary': topic_summaries.get(predicted_topic, "요약 없음")
+                })
         
         return jsonify(result)
     except Exception as e:
@@ -276,7 +314,7 @@ if __name__ == '__main__':
     
     try:
         # 테스트를 위한 room_id 설정
-        room_id = '670f63f099b17496c844bd41'  # 실제 사용할 room_id로 변경하세요
+        room_id = '66b0fd658aab9f2bd7a41841'  # 실제 사용할 room_id로 변경하세요
         
         print(f"Room ID: {room_id}")
         print(f"Combined Threshold: {COMBINED_THRESHOLD}")
