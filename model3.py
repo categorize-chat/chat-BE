@@ -49,7 +49,7 @@ TIME_WINDOW_MINUTES = 4
 THREAD_TIMEOUT = timedelta(hours=1.5)
 MEANINGLESS_CHAT_PATTERN = re.compile(r'^([ㄱ-ㅎㅏ-ㅣ]+|[ㅋㅎㄷ]+|[ㅠㅜ]+|[.]+|[~]+|[!]+|[?]+)+$')
 CHATS_PER_GROUP = 100
-CURRENT_GROUP = 3
+CURRENT_GROUP = 1
 class NSP:
     def __init__(self, tokenizer, model, device):
         self.tokenizer = tokenizer
@@ -276,7 +276,7 @@ if __name__ == '__main__':
     
     try:
         # 테스트를 위한 room_id 설정
-        room_id = '66b0fd658aab9f2bd7a41841'  # 실제 사용할 room_id로 변경하세요
+        room_id = '670f63f099b17496c844bd41'  # 실제 사용할 room_id로 변경하세요
         
         print(f"Room ID: {room_id}")
         print(f"Combined Threshold: {COMBINED_THRESHOLD}")
