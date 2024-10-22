@@ -5,14 +5,17 @@ const axios = require('axios');
 const classifyTopics = async (roomId) => {
   console.log(`classifyTopics started for roomId: ${roomId}`);
   try {
-    // MongoDB에서 채팅 데이터 가져오기
-    console.log('Fetching chats from database...');
+    // MongoDB에서 최근 채팅 데이터 100개 가져오기
+    console.log('Fetching most recent chats from database...');
     const chats = await Chat.find({ room: roomId })
-      .sort('createdAt')
+      .sort({ createdAt: -1 }) // 역순으로 정렬 (-1)
       .limit(100)
       .lean();
     
     console.log(`Fetched ${chats.length} chats`);
+    
+    // 시간순으로 다시 정렬
+    chats.sort((a, b) => a.createdAt - b.createdAt);
     
     // Python 모델에 보낼 데이터 형식으로 변환
     const modelInput = {
