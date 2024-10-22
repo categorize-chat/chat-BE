@@ -2,35 +2,35 @@ import re
 from quart import Quart, request, jsonify
 import json
 import tensorflow as tf
-import os
-from motor.motor_asyncio import AsyncIOMotorClient
-from dotenv import load_dotenv
-from bson import ObjectId
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import AutoTokenizer, AutoModel, AutoModelForNextSentencePrediction, BertTokenizer
+from transformers import AutoTokenizer, AutoModelForNextSentencePrediction, BertTokenizer
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 from datetime import datetime, timedelta
+import numpy as np
+import os
+from dotenv import load_dotenv
 import asyncio
-import openai
 from openai import OpenAI
+import traceback
 
 # .env 파일 로드
 load_dotenv()
 
 app = Quart(__name__)
 
-# MongoDB 연결 (비동기)
-mongodb_uri = os.getenv('MONGODB_URI')
-if not mongodb_uri or not mongodb_uri.startswith(('mongodb://', 'mongodb+srv://')):
-    raise ValueError("Invalid MONGODB_URI. It must start with 'mongodb://' or 'mongodb+srv://'")
-
-client = AsyncIOMotorClient(mongodb_uri)
-db = client.get_database()
-chat_collection = db['chats']
+# 전역 변수 설정
+MAX_THREADS = 15
+MAX_TOPIC_LENGTH = 100
+COMBINED_THRESHOLD = 0.62
+MAX_TOPIC_MESSAGES = 10
+TIME_WEIGHT_FACTOR = 0.4
+MAX_TIME_WEIGHT = 0.15
+TIME_WINDOW_MINUTES = 4
+THREAD_TIMEOUT = timedelta(hours=1.5)
+MEANINGLESS_CHAT_PATTERN = re.compile(r'^([ㄱ-ㅎㅏ-ㅣ]+|[ㅋㅎㄷ]+|[ㅠㅜ]+|[.]+|[~]+|[!]+|[?]+)+$')
 
 # KLUE BERT 모델 및 토크나이저 초기화
 klue_tokenizer = AutoTokenizer.from_pretrained("klue/bert-base")
@@ -47,19 +47,6 @@ sbert_model.to(device)
 
 # OpenAI 클라이언트 초기화
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-# 전역 변수 설정
-MAX_THREADS = 15
-MAX_TOPIC_LENGTH = 100
-COMBINED_THRESHOLD = 0.62
-MAX_TOPIC_MESSAGES = 10
-TIME_WEIGHT_FACTOR = 0.4
-MAX_TIME_WEIGHT = 0.15
-TIME_WINDOW_MINUTES = 4
-THREAD_TIMEOUT = timedelta(hours=1.5)
-MEANINGLESS_CHAT_PATTERN = re.compile(r'^([ㄱ-ㅎㅏ-ㅣ]+|[ㅋㅎㄷ]+|[ㅠㅜ]+|[.]+|[~]+|[!]+|[?]+)+$')
-CHATS_PER_GROUP = 100
-CURRENT_GROUP = 2
 
 # HAN 모델 정의
 class HAN(nn.Module):
@@ -116,7 +103,8 @@ word_gru_num_layers = 1
 sent_gru_num_layers = 1
 num_classes = MAX_THREADS + 1
 
-han_model = HAN(vocab_size, embed_size, word_gru_hidden_size, sent_gru_hidden_size, word_gru_num_layers, sent_gru_num_layers, num_classes)
+han_model = HAN(vocab_size, embed_size, word_gru_hidden_size, sent_gru_hidden_size, 
+                word_gru_num_layers, sent_gru_num_layers, num_classes)
 han_model.to(device)
 
 class NSP:
@@ -137,7 +125,6 @@ class NSP:
             logits = outputs.logits
         
         probs = F.softmax(logits, dim=-1)
-        
         is_same_class = torch.argmax(probs, dim=-1) == 0
         prob = torch.max(probs, dim=-1).values
 
@@ -160,16 +147,6 @@ def is_meaningful_chat(content):
     if len(content.strip()) <= 2:
         return False
     return True
-
-async def get_chat_group(room_id):
-    total_chats = await chat_collection.count_documents({'room': ObjectId(room_id)})
-    start_index = (CURRENT_GROUP - 1) * CHATS_PER_GROUP
-    end_index = min(start_index + CHATS_PER_GROUP, total_chats)
-    
-    cursor = chat_collection.find({'room': ObjectId(room_id)}).sort([('createdAt', 1), ('_id', 1)]).skip(start_index).limit(CHATS_PER_GROUP)
-    chats = await cursor.to_list(length=CHATS_PER_GROUP)
-    
-    return chats, start_index, end_index
 
 def combine_consecutive_chats(chats):
     combined_chats = []
@@ -200,7 +177,8 @@ def cosine_sim(base_messages, target_message):
 
 def han_predict(base_messages, target_message):
     all_messages = base_messages + [target_message]
-    indexed_messages = [han_tokenizer.encode(msg, add_special_tokens=True, max_length=512, truncation=True) for msg in all_messages]
+    indexed_messages = [han_tokenizer.encode(msg, add_special_tokens=True, max_length=512, truncation=True) 
+                       for msg in all_messages]
     max_len = max(len(msg) for msg in indexed_messages)
     padded_messages = [msg + [0] * (max_len - len(msg)) for msg in indexed_messages]
     input_tensor = torch.tensor(padded_messages).unsqueeze(0).to(device)
@@ -236,8 +214,8 @@ def ensemble_score(nsp_model, base_messages, target_message, nsp_weight=0.45, co
     han_probs = han_probs[:min_length]
     
     combined_scores = (nsp_weight * nsp_scores + 
-                       cosine_weight * cosine_sims + 
-                       han_weight * han_probs)
+                      cosine_weight * cosine_sims + 
+                      han_weight * han_probs)
     
     return combined_scores
 
@@ -256,7 +234,8 @@ def assign_topic_with_ensemble_model(nsp_model, topics, content, current_time, t
 
     scores = ensemble_score(nsp_model, active_topics, content)
     
-    time_weights = np.array([calculate_time_weight(current_time, topic_times[i]) for i in active_topic_indices])
+    time_weights = np.array([calculate_time_weight(current_time, topic_times[i]) 
+                            for i in active_topic_indices])
     weighted_scores = scores[:len(active_topics)] + time_weights
     
     new_thread_score = scores[-1] if len(scores) > len(active_topics) else 0
@@ -276,14 +255,7 @@ def assign_topic_with_ensemble_model(nsp_model, topics, content, current_time, t
     return assigned_topic
 
 async def summarize_all_topics(topics_data):
-    """
-    모든 토픽의 채팅을 한번에 GPT에 보내서 요약을 받아옵니다.
-    
-    Args:
-        topics_data: {topic_id: [messages]} 형태의 딕셔너리
-    """
     try:
-        # 모든 토픽의 내용을 하나의 문자열로 구성
         formatted_topics = []
         for topic_id, messages in topics_data.items():
             topic_content = "\n".join(messages)
@@ -293,7 +265,7 @@ async def summarize_all_topics(topics_data):
         
         response = await asyncio.to_thread(
             openai_client.chat.completions.create,
-            model="gpt-4o-mini",
+            model="gpt-4-mini",
             messages=[
                 {"role": "system", "content": """여러 개의 대화 토픽이 주어집니다. 각 토픽은 [Topic N] 형식으로 구분되어 있습니다.
                 각 토픽별로 다음 정보를 제공해주세요:
@@ -311,27 +283,23 @@ async def summarize_all_topics(topics_data):
             response_format={ "type": "json_object" }
         )
         
-        # JSON 파싱
-        result = json.loads(response.choices[0].message.content)
-        return result
+        return json.loads(response.choices[0].message.content)
         
     except Exception as e:
         print(f"Error in summarizing topics: {str(e)}")
         return {}
 
-async def assign_topics(room_id, max_topics=MAX_THREADS):
-    chats, start_index, end_index = await get_chat_group(room_id)
-    
+async def assign_topics(chats):
     if not chats:
         return {}, [], [], {}
 
     combined_chats = combine_consecutive_chats(chats)
     
     topics = [[combined_chats[0]['content']]]
-    topic_mapping = {str(chat['_id']): 0 for chat in combined_chats[0]['original_chats']}
+    topic_mapping = {combined_chat['id']: 0 for combined_chat in combined_chats[0]['original_chats']}
     topic_times = [combined_chats[0]['createdAt']]
     last_speaker_info = {combined_chats[0]['nickname']: (combined_chats[0]['createdAt'], 0)}
-    
+
     nsp_model = NSP(klue_tokenizer, klue_model, device)
     
     for i, combined_chat in enumerate(combined_chats[1:], 1):
@@ -343,7 +311,7 @@ async def assign_topics(room_id, max_topics=MAX_THREADS):
             print(f"Combined Chat {i}: Skipped (meaningless): {content}")
             print()
             for chat in combined_chat['original_chats']:
-                topic_mapping[str(chat['_id'])] = -1
+                topic_mapping[chat['id']] = -1
             continue
 
         print(f"Combined Chat {i}: Content: {content}")
@@ -367,9 +335,9 @@ async def assign_topics(room_id, max_topics=MAX_THREADS):
                 topics[assigned_topic] = topics[assigned_topic][-MAX_TOPIC_MESSAGES:]
         
         for chat in combined_chat['original_chats']:
-            topic_mapping[str(chat['_id'])] = assigned_topic
-            print(f"Chat {start_index + chats.index(chat) + 1}: Content: {chat['content']}")
-            print(f"Chat {start_index + chats.index(chat) + 1}: Assigned to topic {assigned_topic + 1}")
+            topic_mapping[chat['id']] = assigned_topic
+            print(f"Chat ID {chat['id']}: Content: {chat['content']}")
+            print(f"Chat ID {chat['id']}: Assigned to topic {assigned_topic + 1}")
         
         topic_times[assigned_topic] = current_time
         last_speaker_info[current_speaker] = (current_time, assigned_topic)
@@ -378,23 +346,24 @@ async def assign_topics(room_id, max_topics=MAX_THREADS):
         print("\n".join(topics[assigned_topic]))
         print()
 
-    return topic_mapping, chats, topics, {}  # Empty dict instead of topic_summaries
+    return topic_mapping, chats, topics, {}
 
 @app.route('/predict', methods=['POST'])
 async def predict():
     try:
-        print("Predict function called")
         data = await request.get_json()
-        room_id = data.get('room_id', '66b0fd658aab9f2bd7a41842')
+        channel_id = data.get('channelId')
+        chats = data.get('chats', [])
         
-        print(f"Room ID: {room_id}")
-        chat_count = await chat_collection.count_documents({'room': ObjectId(room_id)})
-        print(f"Number of chat messages for room {room_id}: {chat_count}")
+        if not chats:
+            return jsonify({'error': 'No chat messages provided'}), 400
+            
+        # Convert string dates to datetime objects
+        for chat in chats:
+            chat['createdAt'] = datetime.fromisoformat(chat['createdAt'].replace('Z', '+00:00'))
         
-        if chat_count == 0:
-            return jsonify({'error': 'No chat messages found for this room'}), 404
-        
-        topic_mapping, chats, topics, _ = await assign_topics(room_id)
+        # Run topic classification logic
+        topic_mapping, messages, topics, _ = await assign_topics(chats)
         
         # Count chats per topic
         topic_chat_counts = {}
@@ -405,61 +374,43 @@ async def predict():
                 topics_for_summary[topic] = []
             topic_chat_counts[topic] += 1
         
-        # 의미 있는 토픽(5개 이상의 메시지가 있는)만 선별
+        # Select significant topics (5+ messages)
         significant_topics = {}
         for topic_id, count in topic_chat_counts.items():
-            if count >= 5 and topic_id >= 0:  # Exclude -1 topic (meaningless chats)
+            if count >= 5 and topic_id >= 0:
                 significant_topics[str(topic_id)] = topics[topic_id]
         
-        # 한번에 모든 토픽 요약
-        if significant_topics:
-            topic_summaries = await summarize_all_topics(significant_topics)
-        else:
-            topic_summaries = {}
+        # Summarize topics
+        topic_summaries = await summarize_all_topics(significant_topics) if significant_topics else {}
         
-        # Prepare messages array
-        messages = []
-        for chat in chats:
-            chat_id = str(chat['_id'])
-            topic = topic_mapping.get(chat_id, -1)
-            if topic_chat_counts.get(topic, 0) >= 5:  # Only include messages from significant topics
-                messages.append({
-                    "nickname": chat['nickname'],
-                    "createdAt": chat['createdAt'].isoformat(),
-                    "content": chat['content'],
-                    "topic": topic
-                })
-        
+        # Prepare response
         result = {
-            "messages": messages,
+            "messages": [
+                {
+                    "nickname": chat["nickname"],
+                    "createdAt": chat["createdAt"].isoformat(),
+                    "content": chat["content"],
+                    "topic": topic_mapping.get(chat["id"], -1)
+                }
+                for chat in chats
+                if topic_chat_counts.get(topic_mapping.get(chat["id"], -1), 0) >= 5
+            ],
             "summary": topic_summaries
         }
         
-        print("Prediction completed successfully")
         return jsonify({"result": result})
+        
     except Exception as e:
         print(f"Error in predict: {str(e)}")
-        import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
-    
-@app.before_serving
-async def setup():
-    room_id = '66b0fd658aab9f2bd7a41841'  # 실제 사용할 room_id로 변경하세요
-    chat_count = await chat_collection.count_documents({'room': ObjectId(room_id)})
-    print(f"Number of chat messages for room {room_id}: {chat_count}")
-    
-    if chat_count == 0:
-        print('No chat messages found for this room')
 
 if __name__ == '__main__':
-    print("Starting improved NSP-based CATD model with KoSBERT and HAN...")
-    
+    print("Starting improved NSP-based CATD model...")
     try:
         port = int(os.environ.get('PORT', 5000))
         print(f"Server started on port {port}")
         app.run(host='0.0.0.0', port=port)
     except Exception as e:
         print(f"An error occurred during execution: {str(e)}")
-        import traceback
         traceback.print_exc()
