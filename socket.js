@@ -34,6 +34,11 @@ module.exports = (server, app, sessionMiddleware) => {
       });
     });
 
+    socket.on("summary", (data) => {
+      console.log("Received summary:", data);
+      io.of("/chat").to(data.channelId).emit("summary", data);
+    });
+
     socket.on("message", async (data) => {
       try {
         console.log(data);

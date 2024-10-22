@@ -265,7 +265,7 @@ async def summarize_all_topics(topics_data):
         
         response = await asyncio.to_thread(
             openai_client.chat.completions.create,
-            model="gpt-4-mini",
+            model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": """여러 개의 대화 토픽이 주어집니다. 각 토픽은 [Topic N] 형식으로 구분되어 있습니다.
                 각 토픽별로 다음 정보를 제공해주세요:

@@ -134,40 +134,15 @@ exports.classifyChat = async (req, res, next) => {
     if (!channelId) {
       return res.status(400).json({ error: 'channelId is required' });
     }
-    // const result = await classifyTopics(channelId);
-    const result = {
-      messages: [
-        {
-          nickname: "user1",
-          createdAt: "2024-05-21T14:52:52.614581",
-          content: "안녕하세요",
-          topic: 1
-        },
-        {
-          nickname: "user1",
-          createdAt: "2024-05-21T14:52:52.614581",
-          content: "안녕하세요",
-          topic: 2,
-        },
-        {
-          nickname: "user1",
-          createdAt: "2024-05-21T14:52:52.614581",
-          content: "안녕하세요",
-          topic: 0,
-        }
-      ],
-      summary: {
-        0: {
-          keywords: ['슈마메', '파이데이'],
-          content: "....."
-        }
-      }
-    }
+    const result = await classifyTopics(channelId);
+
+    req.app.get("io").of("/chat/summary").to(req.params.id).emit("summary", result);
+
     res.status(200).json({ 
       isSuccess: true, // 성공 여부 (Strue/false)
       code: 200, // 응답 코드
       message: "요청에 성공했습니다.", // 응답 메세지
-      result 
+      result
     });
   } catch (error) {
     console.error('Error in chat classification:', error);
