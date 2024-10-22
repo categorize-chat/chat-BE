@@ -59,7 +59,7 @@ TIME_WINDOW_MINUTES = 4
 THREAD_TIMEOUT = timedelta(hours=1.5)
 MEANINGLESS_CHAT_PATTERN = re.compile(r'^([ㄱ-ㅎㅏ-ㅣ]+|[ㅋㅎㄷ]+|[ㅠㅜ]+|[.]+|[~]+|[!]+|[?]+)+$')
 CHATS_PER_GROUP = 100
-CURRENT_GROUP = 1
+CURRENT_GROUP = 2
 
 # HAN 모델 정의
 class HAN(nn.Module):
@@ -275,20 +275,49 @@ def assign_topic_with_ensemble_model(nsp_model, topics, content, current_time, t
     
     return assigned_topic
 
-async def summarize_chats(content):
+async def summarize_all_topics(topics_data):
+    """
+    모든 토픽의 채팅을 한번에 GPT에 보내서 요약을 받아옵니다.
+    
+    Args:
+        topics_data: {topic_id: [messages]} 형태의 딕셔너리
+    """
     try:
+        # 모든 토픽의 내용을 하나의 문자열로 구성
+        formatted_topics = []
+        for topic_id, messages in topics_data.items():
+            topic_content = "\n".join(messages)
+            formatted_topics.append(f"[Topic {topic_id}]\n{topic_content}")
+        
+        all_content = "\n\n".join(formatted_topics)
+        
         response = await asyncio.to_thread(
             openai_client.chat.completions.create,
-            model="gpt-3.5-turbo",
+            model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "주어진 채팅 내용을 간략하게 요약해주세요. 주요 주제와 핵심 포인트만 언급해주세요."},
-                {"role": "user", "content": content}
-            ]
+                {"role": "system", "content": """여러 개의 대화 토픽이 주어집니다. 각 토픽은 [Topic N] 형식으로 구분되어 있습니다.
+                각 토픽별로 다음 정보를 제공해주세요:
+                1. 해당 토픽의 가장 중요한 키워드 1개 - 키워드는 다른 토픽들과 겹치면 안됩니다.
+                2. 대화 내용의 간단한 요약
+                
+                다음과 같은 JSON 형식으로 응답해주세요:
+                {
+                    "0": {"keywords": ["키워드"], "content": "요약"},
+                    "1": {"keywords": ["키워드"], "content": "요약"},
+                    ...
+                }"""},
+                {"role": "user", "content": all_content}
+            ],
+            response_format={ "type": "json_object" }
         )
-        return response.choices[0].message.content
+        
+        # JSON 파싱
+        result = json.loads(response.choices[0].message.content)
+        return result
+        
     except Exception as e:
-        print(f"Error in summarizing chats: {str(e)}")
-        return "요약을 생성하는 중 오류가 발생했습니다."
+        print(f"Error in summarizing topics: {str(e)}")
+        return {}
 
 async def assign_topics(room_id, max_topics=MAX_THREADS):
     chats, start_index, end_index = await get_chat_group(room_id)
@@ -349,74 +378,65 @@ async def assign_topics(room_id, max_topics=MAX_THREADS):
         print("\n".join(topics[assigned_topic]))
         print()
 
-    # 요약 생성
-    topic_summaries = {}
-    for topic_id, topic_content in enumerate(topics):
-        if len(topic_content) >= 5:  # 채팅이 5개 이상인 토픽만 요약
-            content = "\n".join(topic_content)
-            summary = await summarize_chats(content)
-            topic_summaries[topic_id] = summary
-
-    return topic_mapping, chats, topics, topic_summaries
+    return topic_mapping, chats, topics, {}  # Empty dict instead of topic_summaries
 
 @app.route('/predict', methods=['POST'])
 async def predict():
     try:
         print("Predict function called")
         data = await request.get_json()
-        room_id = data.get('room_id', '66b0fd658aab9f2bd7a41842')  # 실제 사용할 room_id로 변경하세요
+        room_id = data.get('room_id', '66b0fd658aab9f2bd7a41842')
         
         print(f"Room ID: {room_id}")
-        print(f"Combined Threshold: {COMBINED_THRESHOLD}")
-        print(f"Time Weight Factor: {TIME_WEIGHT_FACTOR}")
-        print(f"Max Time Weight: {MAX_TIME_WEIGHT}")
-        print(f"Time Window (minutes): {TIME_WINDOW_MINUTES}")
-        print(f"Thread Timeout: {THREAD_TIMEOUT}")
-        
         chat_count = await chat_collection.count_documents({'room': ObjectId(room_id)})
         print(f"Number of chat messages for room {room_id}: {chat_count}")
         
         if chat_count == 0:
             return jsonify({'error': 'No chat messages found for this room'}), 404
         
-        topic_mapping, chats, topics, topic_summaries = await assign_topics(room_id)
+        topic_mapping, chats, topics, _ = await assign_topics(room_id)
         
-        print("Topic mapping and summaries generated")
-        
-        # Count the number of chats in each topic
+        # Count chats per topic
         topic_chat_counts = {}
+        topics_for_summary = {}
         for chat_id, topic in topic_mapping.items():
             if topic not in topic_chat_counts:
                 topic_chat_counts[topic] = 0
+                topics_for_summary[topic] = []
             topic_chat_counts[topic] += 1
         
-        print("=== Topic Summaries ===")
-        for topic_id, summary in topic_summaries.items():
-            if topic_chat_counts.get(topic_id, 0) >= 5:
-                print(f"\nTopic {topic_id + 1}:")
-                print(f"Number of messages: {topic_chat_counts[topic_id]}")
-                print(f"Summary: {summary}")
-                print("Sample messages:")
-                for msg in topics[topic_id][:3]:  # Print first 3 messages of the topic
-                    print(f"- {msg[:50]}...")  # Print first 50 characters of each message
-        print("========================")
-
-        result = []
+        # 의미 있는 토픽(5개 이상의 메시지가 있는)만 선별
+        significant_topics = {}
+        for topic_id, count in topic_chat_counts.items():
+            if count >= 5 and topic_id >= 0:  # Exclude -1 topic (meaningless chats)
+                significant_topics[str(topic_id)] = topics[topic_id]
+        
+        # 한번에 모든 토픽 요약
+        if significant_topics:
+            topic_summaries = await summarize_all_topics(significant_topics)
+        else:
+            topic_summaries = {}
+        
+        # Prepare messages array
+        messages = []
         for chat in chats:
             chat_id = str(chat['_id'])
-            predicted_topic = int(topic_mapping.get(chat_id, -1))
-            
-            # Skip chats from topics with less than 5 messages
-            if topic_chat_counts.get(predicted_topic, 0) >= 5:
-                result.append({
-                    'content': chat['content'],
-                    'predicted_topic': predicted_topic,
-                    'thread_content': topics[predicted_topic] if predicted_topic >= 0 and predicted_topic < len(topics) else [],
-                    'topic_summary': topic_summaries.get(predicted_topic, "요약 없음")
+            topic = topic_mapping.get(chat_id, -1)
+            if topic_chat_counts.get(topic, 0) >= 5:  # Only include messages from significant topics
+                messages.append({
+                    "nickname": chat['nickname'],
+                    "createdAt": chat['createdAt'].isoformat(),
+                    "content": chat['content'],
+                    "topic": topic
                 })
         
+        result = {
+            "messages": messages,
+            "summary": topic_summaries
+        }
+        
         print("Prediction completed successfully")
-        return jsonify(result)
+        return jsonify({"result": result})
     except Exception as e:
         print(f"Error in predict: {str(e)}")
         import traceback
