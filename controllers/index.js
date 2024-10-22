@@ -4,6 +4,7 @@ const User = require("../schemas/user");
 const classifyTopics = require('../services/chatClassifier');
 
 exports.registerUser = async (req, res, next) => {
+  console.log(`body: ${req.body}`)
   try {
     const exist = 0; //await User.findOne({ nickname: req.body.nickname }); for debug
 
@@ -129,12 +130,45 @@ exports.sendChat = async (req, res, next) => {
 
 exports.classifyChat = async (req, res, next) => {
   try {
-    const { roomId } = req.body;
-    if (!roomId) {
-      return res.status(400).json({ error: 'roomId is required' });
+    const { channelId } = req.body;
+    if (!channelId) {
+      return res.status(400).json({ error: 'channelId is required' });
     }
-    const result = await classifyTopics(roomId);
-    res.status(200).json({ result });
+    // const result = await classifyTopics(channelId);
+    const result = {
+      messages: [
+        {
+          nickname: "user1",
+          createdAt: "2024-05-21T14:52:52.614581",
+          content: "안녕하세요",
+          topic: 1
+        },
+        {
+          nickname: "user1",
+          createdAt: "2024-05-21T14:52:52.614581",
+          content: "안녕하세요",
+          topic: 2,
+        },
+        {
+          nickname: "user1",
+          createdAt: "2024-05-21T14:52:52.614581",
+          content: "안녕하세요",
+          topic: 0,
+        }
+      ],
+      summary: {
+        0: {
+          keywords: ['슈마메', '파이데이'],
+          content: "....."
+        }
+      }
+    }
+    res.status(200).json({ 
+      isSuccess: true, // 성공 여부 (Strue/false)
+      code: 200, // 응답 코드
+      message: "요청에 성공했습니다.", // 응답 메세지
+      result 
+    });
   } catch (error) {
     console.error('Error in chat classification:', error);
     res.status(500).json({ error: 'An error occurred during chat classification' });

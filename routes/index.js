@@ -15,10 +15,11 @@ router.get('/chat', renderMain);
 
 router.post('/chat', createRoom);
 
+router.post('/chat/summary', classifyChat);
+
 router.get('/chat/:id', enterRoom);
 
 router.post('/chat/:id', sendChat);
 
-router.post('/classify', classifyChat);
 
 module.exports = router;
