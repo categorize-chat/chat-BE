@@ -1,399 +1,416 @@
-from flask import Flask, request, jsonify, Response
+import re
+from quart import Quart, request, jsonify
 import json
 import tensorflow as tf
-from tensorflow import keras
-import numpy as np
-from datetime import datetime, timezone
-from openai import OpenAI
-import os
-from pymongo import MongoClient
-from dotenv import load_dotenv
-from bson import ObjectId
-from dateutil import parser
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from transformers import AutoTokenizer, AutoModelForNextSentencePrediction, BertTokenizer
+from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
-from collections import Counter
-from sklearn.metrics import accuracy_score, classification_report
+from datetime import datetime, timedelta
+import numpy as np
+import os
+from dotenv import load_dotenv
+import asyncio
+from openai import OpenAI
+import traceback
 
 # .env 파일 로드
 load_dotenv()
 
-app = Flask(__name__)
+app = Quart(__name__)
 
-# MongoDB 연결
-mongodb_uri = os.getenv('MONGODB_URI')
-if not mongodb_uri or not mongodb_uri.startswith(('mongodb://', 'mongodb+srv://')):
-    raise ValueError("Invalid MONGODB_URI. It must start with 'mongodb://' or 'mongodb+srv://'")
+# 전역 변수 설정
+MAX_THREADS = 15
+MAX_TOPIC_LENGTH = 100
+COMBINED_THRESHOLD = 0.62
+MAX_TOPIC_MESSAGES = 10
+TIME_WEIGHT_FACTOR = 0.4
+MAX_TIME_WEIGHT = 0.15
+TIME_WINDOW_MINUTES = 4
+THREAD_TIMEOUT = timedelta(hours=1.5)
+MEANINGLESS_CHAT_PATTERN = re.compile(r'^([ㄱ-ㅎㅏ-ㅣ]+|[ㅋㅎㄷ]+|[ㅠㅜ]+|[.]+|[~]+|[!]+|[?]+)+$')
 
-client = MongoClient(mongodb_uri)
-db = client.get_database()
-chat_collection = db['chats']
+# KLUE BERT 모델 및 토크나이저 초기화
+klue_tokenizer = AutoTokenizer.from_pretrained("klue/bert-base")
+klue_model = AutoModelForNextSentencePrediction.from_pretrained("klue/bert-base")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+klue_model.to(device)
+
+# HAN 모델용 토크나이저 (KoBERT 토크나이저 사용)
+han_tokenizer = BertTokenizer.from_pretrained("monologg/kobert")
+
+# KoSBERT 모델 초기화
+sbert_model = SentenceTransformer('snunlp/KR-SBERT-V40K-klueNLI-augSTS')
+sbert_model.to(device)
 
 # OpenAI 클라이언트 초기화
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# 전역 변수 설정
-EMBEDDING_DIM = 1536
-USER_EMB_DIM = 64
-TIME_EMB_DIM = 64
-ADDITIONAL_FEATURES = USER_EMB_DIM + TIME_EMB_DIM
-EXPECTED_DIM = EMBEDDING_DIM + ADDITIONAL_FEATURES
-INITIAL_NUM_CLASSES = 5
-BATCH_SIZE = 32
-MAX_THREAD_LENGTH = 20
-SIMILARITY_THRESHOLD = 0.3
-MAX_THREADS = 15
+# HAN 모델 정의
+class HAN(nn.Module):
+    def __init__(self, vocab_size, embed_size, word_gru_hidden_size, sent_gru_hidden_size, word_gru_num_layers, sent_gru_num_layers, num_classes):
+        super(HAN, self).__init__()
+        
+        self.word_attention = WordAttention(vocab_size, embed_size, word_gru_hidden_size, word_gru_num_layers)
+        self.sent_attention = SentenceAttention(word_gru_hidden_size*2, sent_gru_hidden_size, sent_gru_num_layers)
+        self.fc = nn.Linear(sent_gru_hidden_size*2, num_classes)
+        
+    def forward(self, input_tensor):
+        batch_size, num_messages, message_length = input_tensor.size()
+        reshaped_input = input_tensor.view(batch_size * num_messages, message_length)
+        sent_output = self.word_attention(reshaped_input)
+        sent_output = sent_output.view(batch_size, num_messages, -1)
+        doc_output = self.sent_attention(sent_output)
+        output = self.fc(doc_output)
+        return output
 
-embedding_cache = {}
+class WordAttention(nn.Module):
+    def __init__(self, vocab_size, embed_size, gru_hidden_size, gru_num_layers):
+        super(WordAttention, self).__init__()
+        
+        self.embedding = nn.Embedding(vocab_size, embed_size)
+        self.gru = nn.GRU(embed_size, gru_hidden_size, num_layers=gru_num_layers, bidirectional=True, batch_first=True)
+        self.attention = nn.Linear(gru_hidden_size*2, 1)
+        
+    def forward(self, text):
+        embedded = self.embedding(text)
+        gru_out, _ = self.gru(embedded)
+        attention_weights = F.softmax(self.attention(gru_out).squeeze(-1), dim=1)
+        sent_vector = torch.bmm(attention_weights.unsqueeze(1), gru_out).squeeze(1)
+        return sent_vector
 
-class ImprovedCATD(keras.Model):
-    def __init__(self, lstm_units=256, attention_units=128, output_dim=EXPECTED_DIM, initial_num_classes=INITIAL_NUM_CLASSES, dropout_rate=0.5):
-        super(ImprovedCATD, self).__init__()
-        self.lstm_units = lstm_units
-        self.attention_units = attention_units
+class SentenceAttention(nn.Module):
+    def __init__(self, sent_gru_input_size, gru_hidden_size, gru_num_layers):
+        super(SentenceAttention, self).__init__()
+        
+        self.gru = nn.GRU(sent_gru_input_size, gru_hidden_size, num_layers=gru_num_layers, bidirectional=True, batch_first=True)
+        self.attention = nn.Linear(gru_hidden_size*2, 1)
+        
+    def forward(self, sent_vectors):
+        gru_out, _ = self.gru(sent_vectors)
+        attention_weights = F.softmax(self.attention(gru_out).squeeze(-1), dim=1)
+        doc_vector = torch.bmm(attention_weights.unsqueeze(1), gru_out).squeeze(1)
+        return doc_vector
 
-        self.user_embedding_layer = keras.layers.Embedding(input_dim=1000, output_dim=USER_EMB_DIM)
-        self.time_embedding_layer = keras.layers.Dense(TIME_EMB_DIM, activation='relu')
-        
-        self.thread_dense = keras.layers.Dense(self.lstm_units, activation='relu')
-        self.thread_lstm = keras.layers.LSTM(self.lstm_units, return_sequences=True)
-        
-        self.message_dense = keras.layers.Dense(self.lstm_units, activation='relu')
-        
-        # Add these layers to adjust dimensions for attention
-        self.thread_attention_dense = keras.layers.Dense(self.attention_units, activation='relu')
-        self.message_attention_dense = keras.layers.Dense(self.attention_units, activation='relu')
-        self.time_attention_dense = keras.layers.Dense(self.attention_units, activation='relu')
-        
-        self.attention = keras.layers.Attention()
-        self.time_attention = keras.layers.Attention()
-        self.normalization = keras.layers.LayerNormalization()
-        
-        self.dense1 = keras.layers.Dense(output_dim, activation='relu')
-        self.dropout = keras.layers.Dropout(dropout_rate)
-        self.classifier = keras.layers.Dense(initial_num_classes, activation='softmax')
+# HAN 모델 초기화
+vocab_size = len(han_tokenizer.vocab)
+embed_size = 300
+word_gru_hidden_size = 100
+sent_gru_hidden_size = 100
+word_gru_num_layers = 1
+sent_gru_num_layers = 1
+num_classes = MAX_THREADS + 1
 
-    def call(self, inputs, training=False):
-        thread, message, user_ids, time_diffs = inputs
-        
-        # Thread processing
-        thread_processed = self.thread_dense(thread)
-        user_emb_thread = self.user_embedding_layer(user_ids)
-        time_emb_thread = self.time_embedding_layer(time_diffs)
-        
-        combined_thread = tf.concat([thread_processed, user_emb_thread, time_emb_thread], axis=-1)
-        thread_output = self.thread_lstm(combined_thread)
-        
-        # Message processing
-        message_output = self.message_dense(message)
-        message_output = tf.expand_dims(message_output, 1)
-        
-        # Adjust dimensions for attention
-        thread_attention = self.thread_attention_dense(thread_output)
-        message_attention = self.message_attention_dense(message_output)
-        time_attention = self.time_attention_dense(time_emb_thread)
-        
-        # Attention
-        context_vector = self.attention([message_attention, thread_attention])
-        
-        # Time attention
-        time_context = self.time_attention([message_attention, time_attention])
-        
-        # Combine context vectors
-        combined_context = tf.concat([context_vector, time_context], axis=-1)
-        combined_context = tf.squeeze(combined_context, 1)
-        
-        # Normalization and final layers
-        normalized = self.normalization(combined_context)
-        x = self.dense1(normalized)
-        x = self.dropout(x, training=training)
-        return self.classifier(x)
+han_model = HAN(vocab_size, embed_size, word_gru_hidden_size, sent_gru_hidden_size, 
+                word_gru_num_layers, sent_gru_num_layers, num_classes)
+han_model.to(device)
 
-    def expand_classifier(self, new_num_classes):
-        old_weights, old_biases = self.classifier.get_weights()
-        new_weights = np.pad(old_weights, ((0, 0), (0, new_num_classes - self.classifier.units)))
-        new_biases = np.pad(old_biases, (0, new_num_classes - self.classifier.units))
-        self.classifier = keras.layers.Dense(new_num_classes, activation='softmax')
-        self.classifier.set_weights([new_weights, new_biases])
+class NSP:
+    def __init__(self, tokenizer, model, device):
+        self.tokenizer = tokenizer
+        self.model = model
+        self.device = device
 
-def get_or_create_embedding(chat_id, content):
-    if chat_id in embedding_cache:
-        return embedding_cache[chat_id]
-    
-    chat_doc = chat_collection.find_one({"_id": chat_id}, {"embedding": 1})
-    if chat_doc and 'embedding' in chat_doc:
-        embedding = chat_doc['embedding']
+    def __call__(self, base_messages, target_messages):
+        encoding = self.tokenizer(base_messages, target_messages, return_tensors='pt', padding=True, truncation=True)
+        
+        input_ids = encoding['input_ids'].to(self.device)
+        token_type_ids = encoding['token_type_ids'].to(self.device)
+        attention_mask = encoding['attention_mask'].to(self.device)  
+        
+        with torch.no_grad():
+            outputs = self.model(input_ids, token_type_ids=token_type_ids, attention_mask=attention_mask) 
+            logits = outputs.logits
+        
+        probs = F.softmax(logits, dim=-1)
+        is_same_class = torch.argmax(probs, dim=-1) == 0
+        prob = torch.max(probs, dim=-1).values
+
+        return is_same_class, prob
+
+def calculate_time_weight(current_time, thread_time):
+    time_diff = (current_time - thread_time).total_seconds() / 60
+    if time_diff <= TIME_WINDOW_MINUTES:
+        return MAX_TIME_WEIGHT
     else:
-        print("Creating new embedding")
-        try:
-            response = openai_client.embeddings.create(model="text-embedding-3-small", input=content)
-            embedding = response.data[0].embedding
-            chat_collection.update_one({"_id": chat_id}, {"$set": {"embedding": embedding}}, upsert=True)
-        except Exception as e:
-            print(f"Error creating embedding: {str(e)}")
-            embedding = np.random.rand(EMBEDDING_DIM)  # 임시 대체 임베딩
+        return max(0, MAX_TIME_WEIGHT * np.exp(-TIME_WEIGHT_FACTOR * (time_diff - TIME_WINDOW_MINUTES)))
+
+def is_meaningful_chat(content):
+    if not content.strip():
+        return False
+    if MEANINGLESS_CHAT_PATTERN.match(content.strip()):
+        return False
+    if re.match(r'^[가-힣]{1,2}$', content.strip()):
+        return False
+    if len(content.strip()) <= 2:
+        return False
+    return True
+
+def combine_consecutive_chats(chats):
+    combined_chats = []
+    current_combined = None
     
-    embedding_cache[chat_id] = embedding
-    return embedding
-
-def safe_int_convert(value, default=1):
-    try:
-        return int(float(value))  # float로 변환 후 int로 변환
-    except (ValueError, TypeError):
-        return default
-    
-def get_normalized_topic(original_topic):
-    return safe_int_convert(original_topic, default=-1)
-
-def assign_topics(room_id, max_topics=MAX_THREADS, min_topic_size=2):
-    print("Starting assign_topics function")
-    
-    chats = list(chat_collection.find({'room': ObjectId(room_id)}).sort('createdAt', 1))
-    topics = []
-    current_topic = []
-    topic_mapping = {}
-
-    for i, chat in enumerate(chats):
-        chat_id = chat['_id']
-        content = chat['content']
-
-        print(f"Processing chat {i}: Content: {content[:50]}...")
-
-        embedding = get_or_create_embedding(chat_id, content)
-        
-        if not current_topic:
-            current_topic.append((chat_id, embedding))
-            topic_mapping[str(chat_id)] = 1  # Start with topic 1
-            print(f"Chat {i}: First message in new topic 1")
+    for chat in chats:
+        if current_combined is None:
+            current_combined = chat.copy()
+            current_combined['original_chats'] = [chat]
+        elif (chat['createdAt'] - current_combined['createdAt']).total_seconds() <= 60 and chat['nickname'] == current_combined['nickname']:
+            current_combined['content'] += ' ' + chat['content']
+            current_combined['original_chats'].append(chat)
         else:
-            similarities = [cosine_similarity([embedding], [e])[0][0] for _, e in current_topic]
-            max_similarity = max(similarities)
-            
-            if max_similarity < SIMILARITY_THRESHOLD and len(topics) < max_topics - 1:
-                if len(current_topic) >= min_topic_size:
-                    topics.append(current_topic)
-                    current_topic = [(chat_id, embedding)]
-                    topic_mapping[str(chat_id)] = len(topics) + 1
-                    print(f"Chat {i}: Low similarity ({max_similarity:.4f}), created new topic {len(topics) + 1}")
-                else:
-                    topic_mapping[str(chat_id)] = 0  # 아무 토픽에도 속하지 않는 메시지는 0으로 표시
-                    print(f"Chat {i}: Low similarity but current topic too small, assigned 0")
-            else:
-                current_topic.append((chat_id, embedding))
-                topic_mapping[str(chat_id)] = len(topics) + 1
-                print(f"Chat {i}: High similarity or max topics reached, assigned to existing topic {len(topics) + 1}")
+            combined_chats.append(current_combined)
+            current_combined = chat.copy()
+            current_combined['original_chats'] = [chat]
+    
+    if current_combined:
+        combined_chats.append(current_combined)
+    
+    return combined_chats
 
-        print(f"Current unique topics: {set(topic_mapping.values())}")
-        print(f"Assigned topic: {topic_mapping[str(chat_id)]}")
+def cosine_sim(base_messages, target_message):
+    base_embeddings = sbert_model.encode(base_messages)
+    target_embedding = sbert_model.encode([target_message])
+    similarities = cosine_similarity(base_embeddings, target_embedding)
+    return similarities.flatten()
+
+def han_predict(base_messages, target_message):
+    all_messages = base_messages + [target_message]
+    indexed_messages = [han_tokenizer.encode(msg, add_special_tokens=True, max_length=512, truncation=True) 
+                       for msg in all_messages]
+    max_len = max(len(msg) for msg in indexed_messages)
+    padded_messages = [msg + [0] * (max_len - len(msg)) for msg in indexed_messages]
+    input_tensor = torch.tensor(padded_messages).unsqueeze(0).to(device)
+    
+    han_model.eval()
+    with torch.no_grad():
+        output = han_model(input_tensor)
+        probs = F.softmax(output, dim=-1)
+    
+    num_threads = len(base_messages)
+    adjusted_probs = probs[0, :num_threads+1]
+    adjusted_probs = adjusted_probs / adjusted_probs.sum()
+    
+    return adjusted_probs.cpu().numpy()
+
+def ensemble_score(nsp_model, base_messages, target_message, nsp_weight=0.45, cosine_weight=0.45, han_weight=0.1):
+    if not base_messages:
+        return np.array([0.5])
+
+    nsp_results, nsp_probs = nsp_model(base_messages, [target_message] * len(base_messages))
+    nsp_scores = nsp_probs.cpu().numpy().flatten()
+    
+    cosine_sims = cosine_sim(base_messages, target_message).flatten()
+    
+    han_probs = han_predict(base_messages, target_message)
+    
+    nsp_scores = np.append(nsp_scores, [0.5])
+    cosine_sims = np.append(cosine_sims, [0.5])
+    
+    min_length = min(len(nsp_scores), len(cosine_sims), len(han_probs))
+    nsp_scores = nsp_scores[:min_length]
+    cosine_sims = cosine_sims[:min_length]
+    han_probs = han_probs[:min_length]
+    
+    combined_scores = (nsp_weight * nsp_scores + 
+                      cosine_weight * cosine_sims + 
+                      han_weight * han_probs)
+    
+    return combined_scores
+
+def assign_topic_with_ensemble_model(nsp_model, topics, content, current_time, topic_times):
+    active_topics = []
+    active_topic_indices = []
+
+    for idx, (topic, time) in enumerate(zip(topics, topic_times)):
+        if current_time - time <= THREAD_TIMEOUT:
+            active_topics.append(" ".join(topic[-MAX_TOPIC_MESSAGES:]))
+            active_topic_indices.append(idx)
+
+    if not active_topics:
+        print("No active topics. Starting a new topic.")
+        return len(topics)
+
+    scores = ensemble_score(nsp_model, active_topics, content)
+    
+    time_weights = np.array([calculate_time_weight(current_time, topic_times[i]) 
+                            for i in active_topic_indices])
+    weighted_scores = scores[:len(active_topics)] + time_weights
+    
+    new_thread_score = scores[-1] if len(scores) > len(active_topics) else 0
+    
+    max_score = np.max(weighted_scores)
+    
+    if max_score > COMBINED_THRESHOLD and max_score > new_thread_score:
+        assigned_topic = active_topic_indices[np.argmax(weighted_scores)]
+    else:
+        assigned_topic = len(topics)
+    
+    print(f"Weighted ensemble scores: {weighted_scores}")
+    print(f"New thread score: {new_thread_score}")
+    print(f"Active topics: {[idx + 1 for idx in active_topic_indices]}")
+    print(f"Assigned topic: {assigned_topic + 1}")
+    
+    return assigned_topic
+
+async def summarize_all_topics(topics_data):
+    try:
+        formatted_topics = []
+        for topic_id, messages in topics_data.items():
+            topic_content = "\n".join(messages)
+            formatted_topics.append(f"[Topic {topic_id}]\n{topic_content}")
         
-        if (i + 1) % 100 == 0:
-            print(f"Processed {i + 1}/{len(chats)} chats")
-            print(f"Current topic distribution: {Counter(topic_mapping.values())}")
-
-    if current_topic and len(current_topic) >= min_topic_size:
-        topics.append(current_topic)
-    elif current_topic:
-        for chat_id, _ in current_topic:
-            topic_mapping[str(chat_id)] = 0
-
-    print(f"Assigned topics to {len(topic_mapping)} messages")
-    print(f"Final topic distribution: {Counter(topic_mapping.values())}")
-    
-    return topic_mapping
-
-def preprocess_input(thread, new_message=None):
-    nickname_map = {}
-    
-    def get_nickname_id(nickname):
-        if nickname not in nickname_map:
-            nickname_map[nickname] = len(nickname_map)
-        return nickname_map[nickname]
-    
-    def get_time_diff(current_time, thread_time):
-        diff_minutes = abs((current_time - thread_time).total_seconds()) / 60
-        return min(diff_minutes / 30, 1)  # Normalize to [0, 1] with max of 24 hours
-    
-    processed_thread = []
-    user_ids = []
-    time_diffs = []
-    
-    full_thread = thread + [new_message] if new_message else thread
-    full_thread = full_thread[-MAX_THREAD_LENGTH:]  # Consider only the last MAX_THREAD_LENGTH messages
-    
-    for i, current_msg in enumerate(full_thread):
-        msg_id = current_msg.get('id') or current_msg.get('_id')
-        embedding = get_or_create_embedding(msg_id, current_msg['content'])
-        user_id = get_nickname_id(current_msg['nickname'])
-        current_time = current_msg['createdAt'] if isinstance(current_msg['createdAt'], datetime) else parser.isoparse(current_msg['createdAt'])
+        all_content = "\n\n".join(formatted_topics)
         
-        # Calculate time differences with all previous messages in the thread
-        msg_time_diffs = []
-        for prev_msg in full_thread[:i]:
-            prev_time = prev_msg['createdAt'] if isinstance(prev_msg['createdAt'], datetime) else parser.isoparse(prev_msg['createdAt'])
-            msg_time_diffs.append(get_time_diff(current_time, prev_time))
+        response = await asyncio.to_thread(
+            openai_client.chat.completions.create,
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": """여러 개의 대화 토픽이 주어집니다. 각 토픽은 [Topic N] 형식으로 구분되어 있습니다.
+                각 토픽별로 다음 정보를 제공해주세요:
+                1. 해당 토픽의 가장 중요한 키워드 1개 - 키워드는 다른 토픽들과 겹치면 안됩니다.
+                2. 대화 내용의 간단한 요약
+                
+                다음과 같은 JSON 형식으로 응답해주세요:
+                {
+                    "0": {"keywords": ["키워드"], "content": "요약"},
+                    "1": {"keywords": ["키워드"], "content": "요약"},
+                    ...
+                }"""},
+                {"role": "user", "content": all_content}
+            ],
+            response_format={ "type": "json_object" }
+        )
         
-        # Pad time_diffs if necessary
-        msg_time_diffs = [0.0] * (MAX_THREAD_LENGTH - 1 - len(msg_time_diffs)) + msg_time_diffs
+        return json.loads(response.choices[0].message.content)
         
-        processed_thread.append(embedding)
-        user_ids.append(user_id)
-        time_diffs.append(msg_time_diffs)
-    
-    # Padding for the entire thread if necessary
-    while len(processed_thread) < MAX_THREAD_LENGTH:
-        processed_thread.append([0.0] * EMBEDDING_DIM)
-        user_ids.append(0)
-        time_diffs.append([0.0] * (MAX_THREAD_LENGTH - 1))
-    
-    time_diffs = np.array(time_diffs)
-    if time_diffs.ndim == 3:
-        time_diffs = time_diffs.mean(axis=2)  # 마지막 차원의 평균을 취합니다
+    except Exception as e:
+        print(f"Error in summarizing topics: {str(e)}")
+        return {}
 
-    return np.array(processed_thread), np.array(user_ids), time_diffs
+async def assign_topics(chats):
+    if not chats:
+        return {}, [], [], {}
 
-def data_generator(room_id, batch_size=BATCH_SIZE):
-    chats = chat_collection.find({'room': ObjectId(room_id)}).sort('createdAt', 1)
-    total_chats = chat_collection.count_documents({'room': ObjectId(room_id)})
+    combined_chats = combine_consecutive_chats(chats)
     
-    batch_thread, batch_message, batch_user, batch_time, batch_y = [], [], [], [], []
-    topic_to_index = {i: i for i in range(MAX_THREADS)}
+    topics = [[combined_chats[0]['content']]]
+    topic_mapping = {combined_chat['id']: 0 for combined_chat in combined_chats[0]['original_chats']}
+    topic_times = [combined_chats[0]['createdAt']]
+    last_speaker_info = {combined_chats[0]['nickname']: (combined_chats[0]['createdAt'], 0)}
+
+    nsp_model = NSP(klue_tokenizer, klue_model, device)
     
-    for i, chat in enumerate(chats):
-        if i == 0:
+    for i, combined_chat in enumerate(combined_chats[1:], 1):
+        content = combined_chat['content']
+        current_time = combined_chat['createdAt']
+        current_speaker = combined_chat['nickname']
+
+        if not is_meaningful_chat(content):
+            print(f"Combined Chat {i}: Skipped (meaningless): {content}")
+            print()
+            for chat in combined_chat['original_chats']:
+                topic_mapping[chat['id']] = -1
             continue
-        
-        thread = list(chat_collection.find({'room': ObjectId(room_id), 'createdAt': {'$lt': chat['createdAt']}}).sort('createdAt', -1).limit(MAX_THREAD_LENGTH - 1))
-        thread.reverse()
-        
-        try:
-            thread_embed, user_ids, time_diffs = preprocess_input(thread, chat)
-            message_embed = get_or_create_embedding(chat['_id'], chat['content'])
-            
-            topic = min(max(int(chat.get('topic', 0)), 0), MAX_THREADS - 1)
-            y = topic_to_index[topic]
-            
-            batch_thread.append(thread_embed)
-            batch_message.append(message_embed)
-            batch_user.append(user_ids)
-            batch_time.append(time_diffs)
-            batch_y.append(y)
-            
-            if len(batch_thread) == batch_size:
-                yield [np.array(batch_thread), np.array(batch_message), np.array(batch_user), np.array(batch_time)], np.array(batch_y)
-                batch_thread, batch_message, batch_user, batch_time, batch_y = [], [], [], [], []
-        
-        except Exception as e:
-            print(f"Error processing chat {i}: {str(e)}")
-        
-        if i % 100 == 0:
-            print(f"Processed {i}/{total_chats} chats...")
-    
-    if batch_thread:
-        yield [np.array(batch_thread), np.array(batch_message), np.array(batch_user), np.array(batch_time)], np.array(batch_y)  
 
-def train_model(room_id, epochs=10):
-    print("Starting improved model training...")
-    num_classes = MAX_THREADS  # 클래스 수를 MAX_THREADS로 설정
-    
-    model = ImprovedCATD(lstm_units=128, output_dim=EXPECTED_DIM, initial_num_classes=num_classes, dropout_rate=0.5)
-    
-    lr_schedule = keras.optimizers.schedules.ExponentialDecay(
-        initial_learning_rate=1e-3,
-        decay_steps=10000,
-        decay_rate=0.9)
-    optimizer = keras.optimizers.Adam(learning_rate=lr_schedule)
-    
-    model.compile(optimizer=optimizer, 
-                  loss='sparse_categorical_crossentropy', 
-                  metrics=['accuracy'])
-    
-    total_samples = chat_collection.count_documents({'room': ObjectId(room_id)}) - 1
-    steps_per_epoch = total_samples // BATCH_SIZE
-    
-    for epoch in range(epochs):
-        print(f"Epoch {epoch + 1}/{epochs}")
-        generator = data_generator(room_id)
-        model.fit(generator, steps_per_epoch=steps_per_epoch, epochs=1, verbose=1)
-    
-    print("Improved model training completed")
-    return model
+        print(f"Combined Chat {i}: Content: {content}")
+        
+        if current_speaker in last_speaker_info:
+            last_time, last_topic = last_speaker_info[current_speaker]
+            if (current_time - last_time).total_seconds() <= 60:
+                assigned_topic = last_topic
+                print(f"Combined Chat {i}: Same speaker within 1 minute, assigned to topic {assigned_topic + 1}")
+            else:
+                assigned_topic = assign_topic_with_ensemble_model(nsp_model, topics, content, current_time, topic_times)
+        else:
+            assigned_topic = assign_topic_with_ensemble_model(nsp_model, topics, content, current_time, topic_times)
+        
+        if assigned_topic >= len(topics):
+            topics.append([content])
+            topic_times.append(current_time)
+        else:
+            topics[assigned_topic].append(content)
+            if len(topics[assigned_topic]) > MAX_TOPIC_MESSAGES:
+                topics[assigned_topic] = topics[assigned_topic][-MAX_TOPIC_MESSAGES:]
+        
+        for chat in combined_chat['original_chats']:
+            topic_mapping[chat['id']] = assigned_topic
+            print(f"Chat ID {chat['id']}: Content: {chat['content']}")
+            print(f"Chat ID {chat['id']}: Assigned to topic {assigned_topic + 1}")
+        
+        topic_times[assigned_topic] = current_time
+        last_speaker_info[current_speaker] = (current_time, assigned_topic)
+        
+        print(f"Thread content for topic {assigned_topic + 1}:")
+        print("\n".join(topics[assigned_topic]))
+        print()
 
-def save_model(model):
-    models_dir = os.path.join(os.path.dirname(__file__), 'models')
-    os.makedirs(models_dir, exist_ok=True)
-    model_path = os.path.join(models_dir, 'improved_catd_model.keras')
-    model.save(model_path)
-    print(f"Model saved to {model_path}")
-
-def evaluate_predictions(true_topics, predicted_topics):
-    true_labels = [true_topics.get(chat_id, -1) for chat_id in predicted_topics.keys()]
-    pred_labels = list(predicted_topics.values())
-    
-    accuracy = accuracy_score(true_labels, pred_labels)
-    report = classification_report(true_labels, pred_labels, zero_division=0)
-    
-    print(f"Accuracy: {accuracy}")
-    print("\nClassification Report:")
-    print(report)
-    
-    return accuracy, report
-
-# 모델 초기화
-model = ImprovedCATD(lstm_units=256, attention_units=128, output_dim=EXPECTED_DIM, initial_num_classes=MAX_THREADS)
+    return topic_mapping, chats, topics, {}
 
 @app.route('/predict', methods=['POST'])
-def predict():
+async def predict():
     try:
-        data = request.json
-        room_id = data['room_id']
+        data = await request.get_json()
+        channel_id = data.get('channelId')
+        chats = data.get('chats', [])
         
-        print("Room ID:", room_id)
-        
-        chat_count = chat_collection.count_documents({'room': ObjectId(room_id)})
-        print(f"Number of chat messages for room {room_id}: {chat_count}")
-        
-        if chat_count == 0:
-            return jsonify({'error': 'No chat messages found for this room'}), 404
-        
-        chats = list(chat_collection.find({'room': ObjectId(room_id)}).sort('createdAt', 1))
-        result = []
-        
-        for i, chat in enumerate(chats[1:]):  # Skip the first message
-            thread = chats[:i+1]
-            thread_embed, user_ids, time_diffs = preprocess_input(thread[:-1], chat)
-            message_embed = get_or_create_embedding(chat['_id'], chat['content'])
+        if not chats:
+            return jsonify({'error': 'No chat messages provided'}), 400
             
-            inputs = [
-                np.expand_dims(thread_embed, 0),
-                np.expand_dims(message_embed, 0),
-                np.expand_dims(user_ids, 0),
-                np.expand_dims(time_diffs, 0)
-            ]
-            
-            prediction = model.predict(inputs)
-            predicted_topic = int(np.argmax(prediction[0]))
-            
-            result.append({
-                'content': chat['content'],
-                'predicted_topic': predicted_topic
-            })
+        # Convert string dates to datetime objects
+        for chat in chats:
+            chat['createdAt'] = datetime.fromisoformat(chat['createdAt'].replace('Z', '+00:00'))
         
-        return Response(json.dumps(result, ensure_ascii=False), mimetype='application/json')
+        # Run topic classification logic
+        topic_mapping, messages, topics, _ = await assign_topics(chats)
+        
+        # Count chats per topic
+        topic_chat_counts = {}
+        topics_for_summary = {}
+        for chat_id, topic in topic_mapping.items():
+            if topic not in topic_chat_counts:
+                topic_chat_counts[topic] = 0
+                topics_for_summary[topic] = []
+            topic_chat_counts[topic] += 1
+        
+        # Select significant topics (5+ messages)
+        significant_topics = {}
+        for topic_id, count in topic_chat_counts.items():
+            if count >= 5 and topic_id >= 0:
+                significant_topics[str(topic_id)] = topics[topic_id]
+        
+        # Summarize topics
+        topic_summaries = await summarize_all_topics(significant_topics) if significant_topics else {}
+        
+        # Prepare response
+        result = {
+            "messages": [
+                {
+                    "nickname": chat["nickname"],
+                    "createdAt": chat["createdAt"].isoformat(),
+                    "content": chat["content"],
+                    "topic": topic_mapping.get(chat["id"], -1)
+                }
+                for chat in chats
+                if topic_chat_counts.get(topic_mapping.get(chat["id"], -1), 0) >= 5
+            ],
+            "summary": topic_summaries
+        }
+        
+        return jsonify({"result": result})
+        
     except Exception as e:
         print(f"Error in predict: {str(e)}")
-        import traceback
-        traceback.print_exc()   
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    print("Starting improved CATD model...")
-    room_id = '66b0fd658aab9f2bd7a41841'
-    
+    print("Starting improved NSP-based CATD model...")
     try:
-        model = train_model(room_id)
-        save_model(model)
-        
         port = int(os.environ.get('PORT', 5000))
         print(f"Server started on port {port}")
         app.run(host='0.0.0.0', port=port)
     except Exception as e:
         print(f"An error occurred during execution: {str(e)}")
+        traceback.print_exc()

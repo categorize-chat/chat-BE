@@ -1,6 +1,5 @@
 module.exports = (server, app, sessionMiddleware) => {
   const SocketIO = require("socket.io");
-  const { removeRoom } = require("./services");
   const Chat = require("./schemas/chat");
 
   const io = SocketIO(server, { cors: {

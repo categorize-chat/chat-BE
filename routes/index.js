@@ -21,5 +21,4 @@ router.get('/chat/:id', enterRoom);
 
 router.post('/chat/:id', sendChat);
 
-
 module.exports = router;

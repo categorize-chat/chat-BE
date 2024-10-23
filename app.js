@@ -1,9 +1,7 @@
 const express = require('express');
-const path = require('path');
 const morgan = require('morgan');
 const cookieParser = require('cookie-parser');
 const session = require('express-session');
-const nunjucks = require('nunjucks');
 const dotenv = require('dotenv');
 const ColorHash = require('color-hash').default;
 const cors = require('cors');
@@ -35,7 +33,6 @@ const sessionMiddleware = session({
 app.use(cors());
 
 app.use(morgan('dev'));
-app.use('/', express.static(path.join(__dirname, 'public')));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser(process.env.COOKIE_SECRET));
