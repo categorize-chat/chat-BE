@@ -24,13 +24,14 @@ app = Quart(__name__)
 # 전역 변수 설정
 MAX_THREADS = 15
 MAX_TOPIC_LENGTH = 100
-COMBINED_THRESHOLD = 0.62
+COMBINED_THRESHOLD = 0.65
 MAX_TOPIC_MESSAGES = 10
 TIME_WEIGHT_FACTOR = 0.4
 MAX_TIME_WEIGHT = 0.15
 TIME_WINDOW_MINUTES = 4
-THREAD_TIMEOUT = timedelta(hours=1.5)
+THREAD_TIMEOUT = timedelta(hours=12)
 MEANINGLESS_CHAT_PATTERN = re.compile(r'^([ㄱ-ㅎㅏ-ㅣ]+|[ㅋㅎㄷ]+|[ㅠㅜ]+|[.]+|[~]+|[!]+|[?]+)+$')
+CONSECUTIVE_TIME = -1
 
 # KLUE BERT 모델 및 토크나이저 초기화
 klue_tokenizer = AutoTokenizer.from_pretrained("klue/bert-base")
@@ -156,7 +157,7 @@ def combine_consecutive_chats(chats):
         if current_combined is None:
             current_combined = chat.copy()
             current_combined['original_chats'] = [chat]
-        elif (chat['createdAt'] - current_combined['createdAt']).total_seconds() <= 60 and chat['nickname'] == current_combined['nickname']:
+        elif (chat['createdAt'] - current_combined['createdAt']).total_seconds() <= CONSECUTIVE_TIME and chat['nickname'] == current_combined['nickname']:
             current_combined['content'] += ' ' + chat['content']
             current_combined['original_chats'].append(chat)
         else:
@@ -376,7 +377,7 @@ async def predict():
         # Select significant topics (5+ messages)
         significant_topics = {}
         for topic_id, count in topic_chat_counts.items():
-            if count >= 5 and topic_id >= 0:
+            if count >= 4 and topic_id >= 0:
                 significant_topics[str(topic_id)] = topics[topic_id]
         
         # Summarize topics
@@ -387,7 +388,7 @@ async def predict():
             "messages": [
                 {
                     "nickname": chat["nickname"],
-                    "createdAt": chat["createdAt"].isoformat().replace('+00:00', '.000Z'),
+                    "createdAt": chat["createdAt"].isoformat().replace('+00:00', 'Z'),
                     "content": chat["content"],
                     "topic": topic_mapping.get(chat["id"], -1)
                 }
