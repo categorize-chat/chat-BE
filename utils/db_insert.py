@@ -117,7 +117,7 @@ def insert_chat_into_db(db_client, collection_name, chats):
 if __name__ == '__main__':
     # .env 파일 로드
     load_dotenv()
-    train_file = './programming_chat.txt'
+    train_file = './crop_chat.txt'
 
     mongodb_uri = os.getenv('MONGODB_URI')
     room_id = ObjectId()

@@ -274,8 +274,7 @@ async def summarize_all_topics(topics_data):
                 
                 다음과 같은 JSON 형식으로 응답해주세요:
                 {
-                    "0": {"keywords": ["키워드"], "content": "요약"},
-                    "1": {"keywords": ["키워드"], "content": "요약"},
+                    "N": {"keywords": ["키워드"], "content": "요약"},
                     ...
                 }"""},
                 {"role": "user", "content": all_content}
@@ -388,12 +387,11 @@ async def predict():
             "messages": [
                 {
                     "nickname": chat["nickname"],
-                    "createdAt": chat["createdAt"].isoformat(),
+                    "createdAt": chat["createdAt"].isoformat().replace('+00:00', '.000Z'),
                     "content": chat["content"],
                     "topic": topic_mapping.get(chat["id"], -1)
                 }
                 for chat in chats
-                if topic_chat_counts.get(topic_mapping.get(chat["id"], -1), 0) >= 5
             ],
             "summary": topic_summaries
         }

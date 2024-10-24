@@ -2,6 +2,7 @@ const Room = require("../schemas/room");
 const Chat = require("../schemas/chat");
 const User = require("../schemas/user");
 const classifyTopics = require('../services/chatClassifier');
+const mockJson = require("../data/mock.json");
 
 exports.registerUser = async (req, res, next) => { // 유저 등록
   try {
@@ -109,6 +110,7 @@ exports.sendChat = async (req, res, next) => { // 채팅 보내기
       nickname: req.body.nickname,
       content: req.body.content,
       createdAt: new Date(),
+      topic: -1,
     });
     const io = req.app.get("io");
     io.of("/chat").to(req.params.id).emit("chat", chat);
@@ -129,8 +131,7 @@ exports.classifyChat = async (req, res, next) => { // 주제 요약하기 요청
         message: "channelId가 필요합니다.",
       });
     }
-
-    const result = await classifyTopics(channelId); // chatClassifier의 토픽 분류 실행
+    const result = await classifyTopics(channelId);
 
     const io = req.app.get("io");
     io.of("/chat").to(channelId).emit("summary", result);
