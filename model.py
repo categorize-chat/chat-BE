@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 import asyncio
 from openai import OpenAI
 import traceback
+from copy import deepcopy
 
 # .env 파일 로드
 load_dotenv()
@@ -22,16 +23,28 @@ load_dotenv()
 app = Quart(__name__)
 
 # 전역 변수 설정
+PARAMETER_SETS = {
+    'low': {
+        'COMBINED_THRESHOLD': 0.6,
+        'CONSECUTIVE_TIME': 60
+    },
+    'mid': {
+        'COMBINED_THRESHOLD': 0.65,
+        'CONSECUTIVE_TIME': -1
+    },
+    'high': {
+        'COMBINED_THRESHOLD': 0.7,
+        'CONSECUTIVE_TIME': -1
+    }
+}
 MAX_THREADS = 15
 MAX_TOPIC_LENGTH = 100
-COMBINED_THRESHOLD = 0.65
 MAX_TOPIC_MESSAGES = 10
 TIME_WEIGHT_FACTOR = 0.4
 MAX_TIME_WEIGHT = 0.15
 TIME_WINDOW_MINUTES = 4
 THREAD_TIMEOUT = timedelta(hours=12)
 MEANINGLESS_CHAT_PATTERN = re.compile(r'^([ㄱ-ㅎㅏ-ㅣ]+|[ㅋㅎㄷ]+|[ㅠㅜ]+|[.]+|[~]+|[!]+|[?]+)+$')
-CONSECUTIVE_TIME = -1
 
 # KLUE BERT 모델 및 토크나이저 초기화
 klue_tokenizer = AutoTokenizer.from_pretrained("klue/bert-base")
@@ -149,7 +162,12 @@ def is_meaningful_chat(content):
         return False
     return True
 
-def combine_consecutive_chats(chats):
+def combine_consecutive_chats(chats, consecutive_time):
+    if consecutive_time < 0:
+        return [{'id': chat['id'], 'content': chat['content'], 
+                'createdAt': chat['createdAt'], 'nickname': chat['nickname'],
+                'original_chats': [chat]} for chat in chats]
+    
     combined_chats = []
     current_combined = None
     
@@ -157,7 +175,7 @@ def combine_consecutive_chats(chats):
         if current_combined is None:
             current_combined = chat.copy()
             current_combined['original_chats'] = [chat]
-        elif (chat['createdAt'] - current_combined['createdAt']).total_seconds() <= CONSECUTIVE_TIME and chat['nickname'] == current_combined['nickname']:
+        elif (chat['createdAt'] - current_combined['createdAt']).total_seconds() <= consecutive_time and chat['nickname'] == current_combined['nickname']:
             current_combined['content'] += ' ' + chat['content']
             current_combined['original_chats'].append(chat)
         else:
@@ -220,7 +238,7 @@ def ensemble_score(nsp_model, base_messages, target_message, nsp_weight=0.45, co
     
     return combined_scores
 
-def assign_topic_with_ensemble_model(nsp_model, topics, content, current_time, topic_times):
+def assign_topic_with_ensemble_model(nsp_model, topics, content, current_time, topic_times, combined_threshold):
     active_topics = []
     active_topic_indices = []
 
@@ -243,15 +261,10 @@ def assign_topic_with_ensemble_model(nsp_model, topics, content, current_time, t
     
     max_score = np.max(weighted_scores)
     
-    if max_score > COMBINED_THRESHOLD and max_score > new_thread_score:
+    if max_score > combined_threshold and max_score > new_thread_score:
         assigned_topic = active_topic_indices[np.argmax(weighted_scores)]
     else:
         assigned_topic = len(topics)
-    
-    print(f"Weighted ensemble scores: {weighted_scores}")
-    print(f"New thread score: {new_thread_score}")
-    print(f"Active topics: {[idx + 1 for idx in active_topic_indices]}")
-    print(f"Assigned topic: {assigned_topic + 1}")
     
     return assigned_topic
 
@@ -289,11 +302,11 @@ async def summarize_all_topics(topics_data):
         print(f"Error in summarizing topics: {str(e)}")
         return {}
 
-async def assign_topics(chats):
+async def assign_topics_with_params(chats, combined_threshold, consecutive_time):
     if not chats:
         return {}, [], [], {}
 
-    combined_chats = combine_consecutive_chats(chats)
+    combined_chats = combine_consecutive_chats(chats, consecutive_time)
     
     topics = [[combined_chats[0]['content']]]
     topic_mapping = {combined_chat['id']: 0 for combined_chat in combined_chats[0]['original_chats']}
@@ -322,9 +335,13 @@ async def assign_topics(chats):
                 assigned_topic = last_topic
                 print(f"Combined Chat {i}: Same speaker within 1 minute, assigned to topic {assigned_topic + 1}")
             else:
-                assigned_topic = assign_topic_with_ensemble_model(nsp_model, topics, content, current_time, topic_times)
+                assigned_topic = assign_topic_with_ensemble_model(
+                    nsp_model, topics, content, current_time, topic_times, combined_threshold
+                )
         else:
-            assigned_topic = assign_topic_with_ensemble_model(nsp_model, topics, content, current_time, topic_times)
+            assigned_topic = assign_topic_with_ensemble_model(
+                nsp_model, topics, content, current_time, topic_times, combined_threshold
+            )
         
         if assigned_topic >= len(topics):
             topics.append([content])
@@ -336,15 +353,9 @@ async def assign_topics(chats):
         
         for chat in combined_chat['original_chats']:
             topic_mapping[chat['id']] = assigned_topic
-            print(f"Chat ID {chat['id']}: Content: {chat['content']}")
-            print(f"Chat ID {chat['id']}: Assigned to topic {assigned_topic + 1}")
         
         topic_times[assigned_topic] = current_time
         last_speaker_info[current_speaker] = (current_time, assigned_topic)
-        
-        print(f"Thread content for topic {assigned_topic + 1}:")
-        print("\n".join(topics[assigned_topic]))
-        print()
 
     return topic_mapping, chats, topics, {}
 
@@ -362,42 +373,49 @@ async def predict():
         for chat in chats:
             chat['createdAt'] = datetime.fromisoformat(chat['createdAt'].replace('Z', '+00:00'))
         
-        # Run topic classification logic
-        topic_mapping, messages, topics, _ = await assign_topics(chats)
+        # Process for each parameter set
+        results = {}
+        for param_set, params in PARAMETER_SETS.items():
+            # Run topic classification logic with specific parameters
+            topic_mapping, messages, topics, _ = await assign_topics_with_params(
+                deepcopy(chats),
+                params['COMBINED_THRESHOLD'],
+                params['CONSECUTIVE_TIME']
+            )
+            
+            # Count chats per topic
+            topic_chat_counts = {}
+            topics_for_summary = {}
+            for chat_id, topic in topic_mapping.items():
+                if topic not in topic_chat_counts:
+                    topic_chat_counts[topic] = 0
+                    topics_for_summary[topic] = []
+                topic_chat_counts[topic] += 1
+            
+            # Select significant topics (4+ messages)
+            significant_topics = {}
+            for topic_id, count in topic_chat_counts.items():
+                if count >= 4 and topic_id >= 0:
+                    significant_topics[str(topic_id)] = topics[topic_id]
+            
+            # Summarize topics
+            topic_summaries = await summarize_all_topics(significant_topics) if significant_topics else {}
+            
+            # Prepare result for this parameter set
+            results[param_set] = {
+                "messages": [
+                    {
+                        "nickname": chat["nickname"],
+                        "createdAt": chat["createdAt"].isoformat().replace('+00:00', 'Z'),
+                        "content": chat["content"],
+                        "topic": topic_mapping.get(chat["id"], -1)
+                    }
+                    for chat in chats
+                ],
+                "summary": topic_summaries
+            }
         
-        # Count chats per topic
-        topic_chat_counts = {}
-        topics_for_summary = {}
-        for chat_id, topic in topic_mapping.items():
-            if topic not in topic_chat_counts:
-                topic_chat_counts[topic] = 0
-                topics_for_summary[topic] = []
-            topic_chat_counts[topic] += 1
-        
-        # Select significant topics (5+ messages)
-        significant_topics = {}
-        for topic_id, count in topic_chat_counts.items():
-            if count >= 4 and topic_id >= 0:
-                significant_topics[str(topic_id)] = topics[topic_id]
-        
-        # Summarize topics
-        topic_summaries = await summarize_all_topics(significant_topics) if significant_topics else {}
-        
-        # Prepare response
-        result = {
-            "messages": [
-                {
-                    "nickname": chat["nickname"],
-                    "createdAt": chat["createdAt"].isoformat().replace('+00:00', 'Z'),
-                    "content": chat["content"],
-                    "topic": topic_mapping.get(chat["id"], -1)
-                }
-                for chat in chats
-            ],
-            "summary": topic_summaries
-        }
-        
-        return jsonify({"result": result})
+        return jsonify({"result": results})
         
     except Exception as e:
         print(f"Error in predict: {str(e)}")

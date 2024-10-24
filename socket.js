@@ -59,7 +59,6 @@ module.exports = (server, app, sessionMiddleware) => {
       console.log("chat 네임스페이스 접속 해제");
       const { referer } = socket.request.headers; // 브라우저 주소가 들어있음
       const roomId = new URL(referer).pathname.split("/").at(-1);
-      const currentRoom = chatSocket.adapter.rooms.get(roomId);
 
       socket.to(roomId).emit("exit", {
         user: "system",

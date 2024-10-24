@@ -2,7 +2,6 @@ const Room = require("../schemas/room");
 const Chat = require("../schemas/chat");
 const User = require("../schemas/user");
 const classifyTopics = require('../services/chatClassifier');
-const mockJson = require("../data/mock.json");
 
 exports.registerUser = async (req, res, next) => { // 유저 등록
   try {
@@ -13,7 +12,7 @@ exports.registerUser = async (req, res, next) => { // 유저 등록
         nickname: req.body.nickname,
       });
       res.json({ // json 형식으로 전달
-        isSuccess: true, // 성공 여부 (Strue/false)
+        isSuccess: true, // 성공 여부 (true/false)
         code: 200, // 응답 코드
         message: "요청에 성공했습니다.", // 응답 메세지
         result: {
@@ -123,7 +122,7 @@ exports.sendChat = async (req, res, next) => { // 채팅 보내기
 
 exports.classifyChat = async (req, res, next) => { // 주제 요약하기 요청
   try {
-    const { channelId } = req.body;
+    const { channelId, howmany } = req.body;
     if (!channelId) {
       return res.json({
         isSuccess: false,
@@ -131,7 +130,9 @@ exports.classifyChat = async (req, res, next) => { // 주제 요약하기 요청
         message: "channelId가 필요합니다.",
       });
     }
-    const result = await classifyTopics(channelId);
+
+    // howmany가 없을 경우 기본값 100으로 설정
+    const result = await classifyTopics(channelId, howmany || 100); 
 
     const io = req.app.get("io");
     io.of("/chat").to(channelId).emit("summary", result);
