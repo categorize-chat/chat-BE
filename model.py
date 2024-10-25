@@ -25,19 +25,19 @@ app = Quart(__name__)
 # 전역 변수 설정
 PARAMETER_SETS = {
     'low': {
-        'COMBINED_THRESHOLD': 0.6,
-        'CONSECUTIVE_TIME': 60
+        'combined_threshold': 0.6,
+        'consecutive_time': 60
     },
     'mid': {
-        'COMBINED_THRESHOLD': 0.65,
-        'CONSECUTIVE_TIME': -1
+        'combined_threshold': 0.65,
+        'consecutive_time': -1
     },
     'high': {
-        'COMBINED_THRESHOLD': 0.7,
-        'CONSECUTIVE_TIME': -1
+        'combined_threshold': 0.7,
+        'consecutive_time': -1
     }
 }
-MAX_THREADS = 15
+MAX_THREADS = 30
 MAX_TOPIC_LENGTH = 100
 MAX_TOPIC_MESSAGES = 10
 TIME_WEIGHT_FACTOR = 0.4
@@ -374,13 +374,15 @@ async def predict():
             chat['createdAt'] = datetime.fromisoformat(chat['createdAt'].replace('Z', '+00:00'))
         
         # Process for each parameter set
-        results = {}
+        topics_per_param = {}
+        summaries_per_param = {}        
+
         for param_set, params in PARAMETER_SETS.items():
             # Run topic classification logic with specific parameters
             topic_mapping, messages, topics, _ = await assign_topics_with_params(
                 deepcopy(chats),
-                params['COMBINED_THRESHOLD'],
-                params['CONSECUTIVE_TIME']
+                params['combined_threshold'],
+                params['consecutive_time']
             )
             
             # Count chats per topic
@@ -402,20 +404,10 @@ async def predict():
             topic_summaries = await summarize_all_topics(significant_topics) if significant_topics else {}
             
             # Prepare result for this parameter set
-            results[param_set] = {
-                "messages": [
-                    {
-                        "nickname": chat["nickname"],
-                        "createdAt": chat["createdAt"].isoformat().replace('+00:00', 'Z'),
-                        "content": chat["content"],
-                        "topic": topic_mapping.get(chat["id"], -1)
-                    }
-                    for chat in chats
-                ],
-                "summary": topic_summaries
-            }
+            topics_per_param[param_set] = [topic_mapping.get(chat["id"], -1) for chat in chats]
+            summaries_per_param[param_set] = topic_summaries
         
-        return jsonify({"result": results})
+        return jsonify({"topics": topics_per_param, "summaries": summaries_per_param})
         
     except Exception as e:
         print(f"Error in predict: {str(e)}")

@@ -32,20 +32,21 @@ const classifyTopics = async (roomId, howmany = 100) => {
     console.log('Sending request to Python model server');
     const response = await axios.post('http://localhost:5000/predict', modelInput);
     
-    if (!response.data || !response.data.result) {
+    if (response.status === 500 || !response.data || !response.data.topics || !response.data.summaries) {
       throw new Error('Invalid response from model server');
     }
 
-    // 응답이 모든 파라미터 세트 (low, mid, high)를 포함하는지 확인
-    const expectedSets = ['low', 'mid', 'high'];
-    for (const set of expectedSets) {
-      if (!response.data.result[set]) {
-        throw new Error(`Missing parameter set: ${set} in model response`);
-      }
+    const {topics, summaries} = response.data
+
+    const result = {
+      refChat: chats[0],
+      howmany,
+      topics,
+      summaries
     }
 
     console.log('Classification completed for all parameter sets');
-    return response.data.result;
+    return result
 
   } catch (error) {
     console.error('Error in classifyTopics:', error);

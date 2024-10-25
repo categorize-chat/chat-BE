@@ -134,6 +134,7 @@ exports.classifyChat = async (req, res, next) => { // 주제 요약하기 요청
     // howmany가 없을 경우 기본값 100으로 설정
     const result = await classifyTopics(channelId, howmany || 100); 
 
+
     const io = req.app.get("io");
     io.of("/chat").to(channelId).emit("summary", result);
 
