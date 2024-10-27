@@ -1,6 +1,5 @@
 module.exports = (server, app, sessionMiddleware) => {
   const SocketIO = require("socket.io");
-  const { removeRoom } = require("./services");
   const Chat = require("./schemas/chat");
 
   const io = SocketIO(server, { cors: {
@@ -9,11 +8,11 @@ module.exports = (server, app, sessionMiddleware) => {
   }, path: "/socket.io" });
   app.set("io", io);
   const room = io.of("/room");
-  const chat = io.of("/chat");
+  const chatSocket = io.of("/chat");
 
   const wrap = (middleware) => (socket, next) =>
     middleware(socket.request, {}, next);
-  chat.use(wrap(sessionMiddleware));
+  chatSocket.use(wrap(sessionMiddleware));
 
   room.on("connection", (socket) => {
     console.log("room 네임스페이스에 접속");
@@ -22,10 +21,11 @@ module.exports = (server, app, sessionMiddleware) => {
     });
   });
 
-  chat.on("connection", (socket) => {
+  chatSocket.on("connection", (socket) => {
     console.log("chat 네임스페이스에 접속");
 
     socket.on("join", (data) => {
+      console.log('입장')
       socket.join(data);
       socket.to(data).emit("join", {
         user: "system",
@@ -33,17 +33,22 @@ module.exports = (server, app, sessionMiddleware) => {
       });
     });
 
+    socket.on("summary", (data) => {
+      console.log("Received summary:", data);
+      io.of("/chat").to(data.channelId).emit("summary", data);
+    });
+
     socket.on("message", async (data) => {
       try {
         console.log(data);
-        const chat = await Chat.create({
+        const chatData = await Chat.create({
           room: data.roomId,
           nickname: data.nickname,
           content: data.content,
           createdAt: new Date(),
         });
-        io.of("/chat").to(data.roomId).emit("chat", chat);
-        console.log(chat);
+        chatSocket.to(data.roomId).emit("chat", data);
+        console.log(chatData);
       } catch (error) {
         console.error(error);
         socket.emit("error", { message: "메시지 저장 중 오류가 발생했습니다." });
@@ -54,7 +59,6 @@ module.exports = (server, app, sessionMiddleware) => {
       console.log("chat 네임스페이스 접속 해제");
       const { referer } = socket.request.headers; // 브라우저 주소가 들어있음
       const roomId = new URL(referer).pathname.split("/").at(-1);
-      const currentRoom = chat.adapter.rooms.get(roomId);
 
       socket.to(roomId).emit("exit", {
         user: "system",

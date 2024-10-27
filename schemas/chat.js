@@ -18,8 +18,8 @@ const chatSchema = new Schema({
     default: Date.now,
   },
   topic: {
-    type: String,
-    default: null
+    type: Number,
+    default: -1
   },
   embedding: {
     type: [Number],
