@@ -8,7 +8,7 @@ const classifyTopics = async (roomId, howmany = 100) => {
     console.log('Fetching most recent chats from database...');
     // MongoDB에서 최근 채팅 데이터 N개 가져오기
     const chats = await Chat.find({ room: roomId })
-      .sort({_id : -1})
+      .sort({createdAt: -1, _id : -1})
       .limit(howmany)
       .lean();
     
