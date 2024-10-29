@@ -16,6 +16,8 @@ import asyncio
 from openai import OpenAI
 import traceback
 from copy import deepcopy
+import random 
+import torch.backends.cudnn as cudnn
 
 # .env 파일 로드
 load_dotenv()
@@ -62,13 +64,26 @@ sbert_model.to(device)
 # OpenAI 클라이언트 초기화
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+def set_seed(seed=42):
+    """Set all random seeds for reproducibility"""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)  # if using multi-GPU
+    # cudnn.deterministic = True
+    cudnn.benchmark = False
+
+
 # HAN 모델 정의
 class HAN(nn.Module):
-    def __init__(self, vocab_size, embed_size, word_gru_hidden_size, sent_gru_hidden_size, word_gru_num_layers, sent_gru_num_layers, num_classes):
+    def __init__(self, vocab_size, embed_size, word_gru_hidden_size, sent_gru_hidden_size, word_gru_num_layers, sent_gru_num_layers, num_classes, seed=42):
         super(HAN, self).__init__()
+
+        torch.manual_seed(seed)
         
-        self.word_attention = WordAttention(vocab_size, embed_size, word_gru_hidden_size, word_gru_num_layers)
-        self.sent_attention = SentenceAttention(word_gru_hidden_size*2, sent_gru_hidden_size, sent_gru_num_layers)
+        self.word_attention = WordAttention(vocab_size, embed_size, word_gru_hidden_size, word_gru_num_layers, seed)
+        self.sent_attention = SentenceAttention(word_gru_hidden_size*2, sent_gru_hidden_size, sent_gru_num_layers, seed)
         self.fc = nn.Linear(sent_gru_hidden_size*2, num_classes)
         
     def forward(self, input_tensor):
@@ -81,8 +96,10 @@ class HAN(nn.Module):
         return output
 
 class WordAttention(nn.Module):
-    def __init__(self, vocab_size, embed_size, gru_hidden_size, gru_num_layers):
+    def __init__(self, vocab_size, embed_size, gru_hidden_size, gru_num_layers, seed=42):
         super(WordAttention, self).__init__()
+
+        torch.manual_seed(seed)
         
         self.embedding = nn.Embedding(vocab_size, embed_size)
         self.gru = nn.GRU(embed_size, gru_hidden_size, num_layers=gru_num_layers, bidirectional=True, batch_first=True)
@@ -96,8 +113,10 @@ class WordAttention(nn.Module):
         return sent_vector
 
 class SentenceAttention(nn.Module):
-    def __init__(self, sent_gru_input_size, gru_hidden_size, gru_num_layers):
+    def __init__(self, sent_gru_input_size, gru_hidden_size, gru_num_layers, seed=42):
         super(SentenceAttention, self).__init__()
+
+        torch.manual_seed(seed)
         
         self.gru = nn.GRU(sent_gru_input_size, gru_hidden_size, num_layers=gru_num_layers, bidirectional=True, batch_first=True)
         self.attention = nn.Linear(gru_hidden_size*2, 1)
@@ -118,7 +137,7 @@ sent_gru_num_layers = 1
 num_classes = MAX_THREADS + 1
 
 han_model = HAN(vocab_size, embed_size, word_gru_hidden_size, sent_gru_hidden_size, 
-                word_gru_num_layers, sent_gru_num_layers, num_classes)
+                word_gru_num_layers, sent_gru_num_layers, num_classes, seed=42)
 han_model.to(device)
 
 class NSP:
@@ -283,7 +302,7 @@ async def summarize_all_topics(topics_data):
             messages=[
                 {"role": "system", "content": """여러 개의 대화 토픽이 주어집니다. 각 토픽은 [Topic N] 형식으로 구분되어 있습니다.
                 각 토픽별로 다음 정보를 제공해주세요:
-                1. 해당 토픽의 가장 중요한 키워드 1개 - 키워드는 다른 토픽들과 겹치면 안됩니다.
+                1. 해당 토픽의 가장 중요한 키워드 1개 - 키워드는 다른 토픽들과 겹치면 안됩니다. 가장 많이 나오는 단어 위주로 선택해주세요.
                 2. 대화 내용의 간단한 요약
                 
                 다음과 같은 JSON 형식으로 응답해주세요:
@@ -417,6 +436,8 @@ async def predict():
 if __name__ == '__main__':
     print("Starting improved NSP-based CATD model...")
     try:
+        set_seed()
+
         port = int(os.environ.get('PORT', 5000))
         print(f"Server started on port {port}")
         app.run(host='0.0.0.0', port=port)
