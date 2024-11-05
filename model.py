@@ -24,15 +24,15 @@ app = Quart(__name__)
 # 전역 변수 설정
 PARAMETER_SETS = {
     'low': {
-        'combined_threshold': 0.6,
+        'combined_threshold': 0.62,
         'consecutive_time': 60
     },
     'mid': {
-        'combined_threshold': 0.65,
+        'combined_threshold': 0.67,
         'consecutive_time': -1
     },
     'high': {
-        'combined_threshold': 0.7,
+        'combined_threshold': 0.72,
         'consecutive_time': -1
     }
 }

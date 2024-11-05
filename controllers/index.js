@@ -88,12 +88,12 @@ exports.createRoom = async (req, res, next) => {
 // 해당 채팅방의 모든 채팅 전달
 exports.enterRoom = async (req, res, next) => {
   try {
-    const room = await Room.findOne({ _id: req.params.id }); // 유효한 채널ID인지 검증
+    const room = await Room.findOne({ channelId: req.params.id }); // 유효한 채널ID인지 검증
     if (!room) {
       return res.redirect("/?error=존재하지 않는 방입니다.");
     }
 
-    const messages = await Chat.find({ room: room._id }).sort("createdAt");
+    const messages = await Chat.find({ room: room.channelId }).sort("createdAt");
     return res.json({
       isSuccess: true,
       code: 200,
