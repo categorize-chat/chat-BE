@@ -3,9 +3,8 @@ from quart import Quart, request, jsonify
 import json
 import tensorflow as tf
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-from transformers import AutoTokenizer, AutoModelForNextSentencePrediction, BertTokenizer
+from transformers import AutoTokenizer, AutoModelForNextSentencePrediction
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 from datetime import datetime, timedelta
@@ -37,8 +36,6 @@ PARAMETER_SETS = {
         'consecutive_time': -1
     }
 }
-MAX_THREADS = 30
-MAX_TOPIC_LENGTH = 100
 MAX_TOPIC_MESSAGES = 10
 TIME_WEIGHT_FACTOR = 0.4
 MAX_TIME_WEIGHT = 0.15
@@ -46,80 +43,18 @@ TIME_WINDOW_MINUTES = 4
 THREAD_TIMEOUT = timedelta(hours=12)
 MEANINGLESS_CHAT_PATTERN = re.compile(r'^([ㄱ-ㅎㅏ-ㅣ]+|[ㅋㅎㄷ]+|[ㅠㅜ]+|[.]+|[~]+|[!]+|[?]+)+$')
 
-# KLUE BERT 모델 및 토크나이저 초기화
+# KLUE BERT 모델 및 토크나이저 초기화 (NSP용)
 klue_tokenizer = AutoTokenizer.from_pretrained("klue/bert-base")
 klue_model = AutoModelForNextSentencePrediction.from_pretrained("klue/bert-base")
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 klue_model.to(device)
 
-# HAN 모델용 토크나이저 (KoBERT 토크나이저 사용)
-han_tokenizer = BertTokenizer.from_pretrained("monologg/kobert")
-
-# KoSBERT 모델 초기화
+# KR-SBERT 모델 초기화 (임베딩용)
 sbert_model = SentenceTransformer('snunlp/KR-SBERT-V40K-klueNLI-augSTS')
 sbert_model.to(device)
 
-# OpenAI 클라이언트 초기화
+# OpenAI 클라이언트 초기화 (요약용)
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-# HAN 모델 정의
-class HAN(nn.Module):
-    def __init__(self, vocab_size, embed_size, word_gru_hidden_size, sent_gru_hidden_size, word_gru_num_layers, sent_gru_num_layers, num_classes):
-        super(HAN, self).__init__()
-        
-        self.word_attention = WordAttention(vocab_size, embed_size, word_gru_hidden_size, word_gru_num_layers)
-        self.sent_attention = SentenceAttention(word_gru_hidden_size*2, sent_gru_hidden_size, sent_gru_num_layers)
-        self.fc = nn.Linear(sent_gru_hidden_size*2, num_classes)
-        
-    def forward(self, input_tensor):
-        batch_size, num_messages, message_length = input_tensor.size()
-        reshaped_input = input_tensor.view(batch_size * num_messages, message_length)
-        sent_output = self.word_attention(reshaped_input)
-        sent_output = sent_output.view(batch_size, num_messages, -1)
-        doc_output = self.sent_attention(sent_output)
-        output = self.fc(doc_output)
-        return output
-
-class WordAttention(nn.Module):
-    def __init__(self, vocab_size, embed_size, gru_hidden_size, gru_num_layers):
-        super(WordAttention, self).__init__()
-        
-        self.embedding = nn.Embedding(vocab_size, embed_size)
-        self.gru = nn.GRU(embed_size, gru_hidden_size, num_layers=gru_num_layers, bidirectional=True, batch_first=True)
-        self.attention = nn.Linear(gru_hidden_size*2, 1)
-        
-    def forward(self, text):
-        embedded = self.embedding(text)
-        gru_out, _ = self.gru(embedded)
-        attention_weights = F.softmax(self.attention(gru_out).squeeze(-1), dim=1)
-        sent_vector = torch.bmm(attention_weights.unsqueeze(1), gru_out).squeeze(1)
-        return sent_vector
-
-class SentenceAttention(nn.Module):
-    def __init__(self, sent_gru_input_size, gru_hidden_size, gru_num_layers):
-        super(SentenceAttention, self).__init__()
-        
-        self.gru = nn.GRU(sent_gru_input_size, gru_hidden_size, num_layers=gru_num_layers, bidirectional=True, batch_first=True)
-        self.attention = nn.Linear(gru_hidden_size*2, 1)
-        
-    def forward(self, sent_vectors):
-        gru_out, _ = self.gru(sent_vectors)
-        attention_weights = F.softmax(self.attention(gru_out).squeeze(-1), dim=1)
-        doc_vector = torch.bmm(attention_weights.unsqueeze(1), gru_out).squeeze(1)
-        return doc_vector
-
-# HAN 모델 초기화
-vocab_size = len(han_tokenizer.vocab)
-embed_size = 300
-word_gru_hidden_size = 100
-sent_gru_hidden_size = 100
-word_gru_num_layers = 1
-sent_gru_num_layers = 1
-num_classes = MAX_THREADS + 1
-
-han_model = HAN(vocab_size, embed_size, word_gru_hidden_size, sent_gru_hidden_size, 
-                word_gru_num_layers, sent_gru_num_layers, num_classes)
-han_model.to(device)
 
 class NSP:
     def __init__(self, tokenizer, model, device):
@@ -139,10 +74,9 @@ class NSP:
             logits = outputs.logits
         
         probs = F.softmax(logits, dim=-1)
-        is_same_class = torch.argmax(probs, dim=-1) == 0
         prob = torch.max(probs, dim=-1).values
 
-        return is_same_class, prob
+        return prob
 
 def calculate_time_weight(current_time, thread_time):
     time_diff = (current_time - thread_time).total_seconds() / 60
@@ -152,14 +86,26 @@ def calculate_time_weight(current_time, thread_time):
         return max(0, MAX_TIME_WEIGHT * np.exp(-TIME_WEIGHT_FACTOR * (time_diff - TIME_WINDOW_MINUTES)))
 
 def is_meaningful_chat(content):
-    if not content.strip():
+    stripped_content = content.strip()
+    
+    # 길이 체크를 가장 먼저 (가장 빠른 연산)
+    if len(stripped_content) <= 2:
         return False
-    if MEANINGLESS_CHAT_PATTERN.match(content.strip()):
+        
+    # 빈 문자열 체크
+    if not stripped_content:
         return False
-    if re.match(r'^[가-힣]{1,2}$', content.strip()):
+
+    # 단순 한글 1-2글자 체크
+    # \u3131 ~ \u3163: 한글 자음/모음 (초성, 중성)
+    # \uAC00 ~ \uD7A3: 완성된 글자
+    if len(stripped_content) <= 2 and all(('\u3131' <= char <= '\u3163') or ('\uAC00' <= char <= '\uD7A3') for char in stripped_content):
         return False
-    if len(content.strip()) <= 2:
+
+    # 무의미한 패턴 체크 (가장 비용이 큰 연산을 마지막에)
+    if MEANINGLESS_CHAT_PATTERN.match(stripped_content):
         return False
+        
     return True
 
 def combine_consecutive_chats(chats, consecutive_time):
@@ -194,47 +140,23 @@ def cosine_sim(base_messages, target_message):
     similarities = cosine_similarity(base_embeddings, target_embedding)
     return similarities.flatten()
 
-def han_predict(base_messages, target_message):
-    all_messages = base_messages + [target_message]
-    indexed_messages = [han_tokenizer.encode(msg, add_special_tokens=True, max_length=512, truncation=True) 
-                       for msg in all_messages]
-    max_len = max(len(msg) for msg in indexed_messages)
-    padded_messages = [msg + [0] * (max_len - len(msg)) for msg in indexed_messages]
-    input_tensor = torch.tensor(padded_messages).unsqueeze(0).to(device)
-    
-    han_model.eval()
-    with torch.no_grad():
-        output = han_model(input_tensor)
-        probs = F.softmax(output, dim=-1)
-    
-    num_threads = len(base_messages)
-    adjusted_probs = probs[0, :num_threads+1]
-    adjusted_probs = adjusted_probs / adjusted_probs.sum()
-    
-    return adjusted_probs.cpu().numpy()
-
-def ensemble_score(nsp_model, base_messages, target_message, nsp_weight=0.45, cosine_weight=0.45, han_weight=0.1):
+def ensemble_score(nsp_model, base_messages, target_message):
     if not base_messages:
         return np.array([0.5])
 
-    nsp_results, nsp_probs = nsp_model(base_messages, [target_message] * len(base_messages))
+    nsp_probs = nsp_model(base_messages, [target_message] * len(base_messages))
     nsp_scores = nsp_probs.cpu().numpy().flatten()
     
     cosine_sims = cosine_sim(base_messages, target_message).flatten()
     
-    han_probs = han_predict(base_messages, target_message)
-    
     nsp_scores = np.append(nsp_scores, [0.5])
     cosine_sims = np.append(cosine_sims, [0.5])
     
-    min_length = min(len(nsp_scores), len(cosine_sims), len(han_probs))
+    min_length = min(len(nsp_scores), len(cosine_sims))
     nsp_scores = nsp_scores[:min_length]
     cosine_sims = cosine_sims[:min_length]
-    han_probs = han_probs[:min_length]
     
-    combined_scores = (nsp_weight * nsp_scores + 
-                      cosine_weight * cosine_sims + 
-                      han_weight * han_probs)
+    combined_scores = (0.5 * nsp_scores + 0.5 * cosine_sims)
     
     return combined_scores
 
@@ -251,21 +173,49 @@ def assign_topic_with_ensemble_model(nsp_model, topics, content, current_time, t
         print("No active topics. Starting a new topic.")
         return len(topics)
 
+    # Get ensemble scores
     scores = ensemble_score(nsp_model, active_topics, content)
     
+    # Calculate time weights for each active topic
     time_weights = np.array([calculate_time_weight(current_time, topic_times[i]) 
                             for i in active_topic_indices])
+    
+    # Add time weights to get final scores
     weighted_scores = scores[:len(active_topics)] + time_weights
     
+    # Score for creating a new thread
     new_thread_score = scores[-1] if len(scores) > len(active_topics) else 0
+    
+    print("\nScoring Details:")
+    print("-" * 50)
+    print(f"Content being analyzed: {content}")
+    print(f"Number of active topics: {len(active_topics)}")
+    print("\nScores for each active topic:")
+    for i, (topic_idx, base_score, time_weight, final_score) in enumerate(zip(
+        active_topic_indices, 
+        scores[:len(active_topics)], 
+        time_weights, 
+        weighted_scores
+    )):
+        print(f"\nTopic {topic_idx + 1}:")
+        print(f"  Base ensemble score: {base_score:.4f}")
+        print(f"  Time weight: {time_weight:.4f}")
+        print(f"  Final weighted score: {final_score:.4f}")
+        print(f"  Recent messages in topic: {topics[topic_idx][-3:]}")  # Show last 3 messages
+    
+    print(f"\nNew thread score: {new_thread_score:.4f}")
+    print(f"Combined threshold: {combined_threshold}")
     
     max_score = np.max(weighted_scores)
     
     if max_score > combined_threshold and max_score > new_thread_score:
         assigned_topic = active_topic_indices[np.argmax(weighted_scores)]
+        print(f"\nAssigned to existing topic {assigned_topic + 1} (score: {max_score:.4f})")
     else:
         assigned_topic = len(topics)
+        print(f"\nStarting new topic {assigned_topic + 1} (highest existing topic score: {max_score:.4f})")
     
+    print("-" * 50)
     return assigned_topic
 
 async def summarize_all_topics(topics_data):
@@ -321,19 +271,19 @@ async def assign_topics_with_params(chats, combined_threshold, consecutive_time)
         current_speaker = combined_chat['nickname']
 
         if not is_meaningful_chat(content):
-            print(f"Combined Chat {i}: Skipped (meaningless): {content}")
+            print(f"Chat {i}: Skipped (meaningless): {content}")
             print()
             for chat in combined_chat['original_chats']:
                 topic_mapping[chat['id']] = -1
             continue
 
-        print(f"Combined Chat {i}: Content: {content}")
+        print(f"Chat {i}: Content: {content}")
         
         if current_speaker in last_speaker_info:
             last_time, last_topic = last_speaker_info[current_speaker]
             if (current_time - last_time).total_seconds() <= 60:
                 assigned_topic = last_topic
-                print(f"Combined Chat {i}: Same speaker within 1 minute, assigned to topic {assigned_topic + 1}")
+                print(f"Chat {i}: Same speaker within 1 minute, assigned to topic {assigned_topic + 1}")
             else:
                 assigned_topic = assign_topic_with_ensemble_model(
                     nsp_model, topics, content, current_time, topic_times, combined_threshold
@@ -363,7 +313,6 @@ async def assign_topics_with_params(chats, combined_threshold, consecutive_time)
 async def predict():
     try:
         data = await request.get_json()
-        channel_id = data.get('channelId')
         chats = data.get('chats', [])
         
         if not chats:
@@ -413,9 +362,9 @@ async def predict():
         print(f"Error in predict: {str(e)}")
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
-
+    
 if __name__ == '__main__':
-    print("Starting improved NSP-based CATD model...")
+    print("Starting model...")
     try:
         port = int(os.environ.get('PORT', 5000))
         print(f"Server started on port {port}")

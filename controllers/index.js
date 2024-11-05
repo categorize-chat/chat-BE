@@ -3,11 +3,12 @@ const Chat = require("../schemas/chat");
 const User = require("../schemas/user");
 const classifyTopics = require('../services/chatClassifier');
 
-exports.registerUser = async (req, res, next) => { // 유저 등록
+// client로부터 받은 닉네임으로 DB에 새로운 User 생성
+exports.registerUser = async (req, res, next) => { 
   try {
     const exist = await User.findOne({ nickname: req.body.nickname }); // 닉네임 중복 확인
 
-    if (!exist) { // 새로운 닉네임일 경우 계정 생성
+    if (!exist) {
       const newUser = await User.create({
         nickname: req.body.nickname,
       });
@@ -33,7 +34,8 @@ exports.registerUser = async (req, res, next) => { // 유저 등록
   }
 };
 
-exports.renderMain = async (req, res, next) => { // 채팅방 조회
+// 생성된 모든 채팅방들의 목록을 전달
+exports.renderMain = async (req, res, next) => {
   try {
     const channels = await Room.find(); // DB에서 지금까지 생성된 채팅방 조회
     res.json({
@@ -48,11 +50,12 @@ exports.renderMain = async (req, res, next) => { // 채팅방 조회
   }
 };
 
-exports.createRoom = async (req, res, next) => { // 채팅방 생성
+// client로부터 받은 이름으로 DB에 새 채팅방 생성
+exports.createRoom = async (req, res, next) => {
   try {
     const exist = await Room.findOne({ channelName: req.body.channelName }); // 채팅방 이름 중복 확인
 
-    if (!exist) { // 중복 아닐 경우 채팅방 생성
+    if (!exist) {
       const newRoom = await Room.create({
         channelName: req.body.channelName,
       });
@@ -69,7 +72,7 @@ exports.createRoom = async (req, res, next) => { // 채팅방 생성
           channelName: newRoom.channelName,
         },
       });
-    } else { // 중복일 경우 경고
+    } else {
       res.json({
         isSuccess: false,
         code: 404,
@@ -82,14 +85,15 @@ exports.createRoom = async (req, res, next) => { // 채팅방 생성
   }
 };
 
-exports.enterRoom = async (req, res, next) => { // 채팅 내역 조회
+// 해당 채팅방의 모든 채팅 전달
+exports.enterRoom = async (req, res, next) => {
   try {
     const room = await Room.findOne({ _id: req.params.id }); // 유효한 채널ID인지 검증
     if (!room) {
       return res.redirect("/?error=존재하지 않는 방입니다.");
     }
 
-    const messages = await Chat.find({ room: room._id }).sort("createdAt"); // room의 채팅들을 생성순으로 정렬
+    const messages = await Chat.find({ room: room._id }).sort("createdAt");
     return res.json({
       isSuccess: true,
       code: 200,
@@ -102,7 +106,7 @@ exports.enterRoom = async (req, res, next) => { // 채팅 내역 조회
   }
 };
 
-exports.sendChat = async (req, res, next) => { // 채팅 보내기
+exports.sendChat = async (req, res, next) => {
   try {
     const chat = await Chat.create({
       room: req.params.roomId,
@@ -120,7 +124,8 @@ exports.sendChat = async (req, res, next) => { // 채팅 보내기
   }
 };
 
-exports.classifyChat = async (req, res, next) => { // 주제 요약하기 요청
+// model 서버에 주제 요약 요청하고 그 결과값을 받아옴
+exports.classifyChat = async (req, res, next) => {
   try {
     const { channelId, howmany } = req.body;
     if (!channelId) {
@@ -131,9 +136,8 @@ exports.classifyChat = async (req, res, next) => { // 주제 요약하기 요청
       });
     }
 
-    // howmany가 없을 경우 기본값 100으로 설정
+    // howmany가 없을 경우 채팅 100개만 분류
     const result = await classifyTopics(channelId, howmany || 100); 
-
 
     const io = req.app.get("io");
     io.of("/chat").to(channelId).emit("summary", result);
