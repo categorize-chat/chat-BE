@@ -4,7 +4,9 @@ const generateToken = (user) => {
   const accessToken = jwt.sign(
     { 
       id: user._id,
-      nickname: user.nickname
+      nickname: user.nickname,
+      email: user.email,
+      profileUrl: user.profileUrl
     },
     process.env.JWT_SECRET,
     { expiresIn: '1d' }

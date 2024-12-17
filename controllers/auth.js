@@ -1,5 +1,8 @@
 const axios = require('axios');
 const jwt = require('jsonwebtoken');
+const User = require('../schemas/user');
+const { generateToken } = require('../utils/jwt');
+
 
 exports.authKakao = async (req, res, next) => {
   try {
@@ -28,16 +31,21 @@ exports.authKakao = async (req, res, next) => {
       email: data.kakao_account.email,
     }));
 
-    // TODO: DB에 유저 정보 저장 (+ 있는지 확인)
+    // 기존 유저 확인. email 을 키로.
+    const exUser = await User.findOne({
+      email: user.email,
+    });
 
-    // JWT 토큰 발급. TODO: 토큰 생성 로직 분리
-    const accessToken = jwt.sign(user, process.env.JWT_SECRET, {
-      expiresIn: '1h',
+    // 기존 유저가 없다면 새로 생성
+    const targetUser = exUser || await User.create({
+      nickname: user.nickname,
+      email: user.email,
+      profileUrl: user.profileUrl,
     });
-    const refreshToken = jwt.sign({}, process.env.JWT_SECRET, {
-      expiresIn: '14d',
-    });
-    
+
+    // JWT 토큰 발급
+    const {accessToken, refreshToken} = generateToken(targetUser);
+
     res.header(
       'Set-Cookie', `refreshToken=${refreshToken}; Path=/; HttpOnly`,
     );

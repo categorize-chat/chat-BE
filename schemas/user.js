@@ -7,22 +7,21 @@ const userSchema = new Schema({
     required: true,
   },
   userId: {
-    unique: true,
+    // unique: true,
     type: String,
     default: function() {
       return this._id.toString();
     }
   },
-  snsId: {
-    type: String,
-    unique: true,
-  },
-  provider: {
+  profileUrl: {
     type: String,
     required: true,
   },
-  profileImage: String,
-  email: String
+  email: {
+    type: String,
+    unique: true,
+    required: true,
+  }
 }, {
   versionKey: false,
   id: false,

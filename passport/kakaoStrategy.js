@@ -5,9 +5,11 @@ const { generateToken } = require('../utils/jwt');
 module.exports = () => {
   return new KakaoStrategy({
     clientID: process.env.KAKAO_ID,
-    callbackURL: 'http://localhost:8005/user/oauth/kakao',
+    callbackURL: process.env.KAKAO_REDIRECT_URI,
   }, async (accessToken, refreshToken, profile, done) => {
     try {
+      console.log(profile);
+
       const exUser = await User.findOne({
         snsId: profile.id,
         provider: 'kakao',
