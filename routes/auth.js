@@ -4,23 +4,14 @@ const User = require('../schemas/user');
 const { verifyToken } = require('../utils/jwt');
 const router = express.Router();
 
+const { authKakao } = require('../controllers/auth');
+
+
 // 카카오 로그인
-router.get('/kakao', passport.authenticate('kakao'));
+// router.get('/kakao', passport.authenticate('kakao'));
 
 // 카카오 콜백 처리
-router.get('/user/oauth/kakao', 
-  passport.authenticate('kakao', { session: false }), 
-  (req, res) => {
-    const { user, tokens } = req.user;
-    // 프론트엔드의 콜백 처리 페이지로 리다이렉트
-    const clientUrl = process.env.CLIENT_URL || 'http://localhost:3000';
-    res.redirect(
-      `${clientUrl}/auth/callback?` + 
-      `accessToken=${tokens.accessToken}&` + 
-      `refreshToken=${tokens.refreshToken}`
-    );
-  }
-);
+router.post('/kakao', authKakao);
 
 // 토큰 갱신
 router.post('/refresh', async (req, res) => {
