@@ -1,4 +1,4 @@
 .env
 models
 node_modules
-utils
+utils/chats

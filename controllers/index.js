@@ -37,7 +37,10 @@ exports.registerUser = async (req, res, next) => {
 // 생성된 모든 채팅방들의 목록을 전달
 exports.renderMain = async (req, res, next) => {
   try {
-    const channels = await Room.find(); // DB에서 지금까지 생성된 채팅방 조회
+    const channels = await Room.find()
+      .populate('owner', 'nickname')  // owner의 정보 포함
+      .populate('participants', 'nickname profileImage');  // 참여자 정보 포함
+    
     res.json({
       isSuccess: true,
       code: 200,
@@ -58,6 +61,8 @@ exports.createRoom = async (req, res, next) => {
     if (!exist) {
       const newRoom = await Room.create({
         channelName: req.body.channelName,
+        owner: req.user.id,  // 로그인한 사용자를 owner로 지정
+        participants: [req.user.id]  // 생성자를 첫 참여자로 추가
       });
 
       const io = req.app.get("io");
@@ -70,6 +75,8 @@ exports.createRoom = async (req, res, next) => {
         result: {
           channelId: newRoom.channelId,
           channelName: newRoom.channelName,
+          owner: newRoom.owner,
+          participants: newRoom.participants
         },
       });
     } else {
@@ -88,17 +95,32 @@ exports.createRoom = async (req, res, next) => {
 // 해당 채팅방의 모든 채팅 전달
 exports.enterRoom = async (req, res, next) => {
   try {
-    const room = await Room.findOne({ channelId: req.params.id }); // 유효한 채널ID인지 검증
+    const room = await Room.findOne({ _id: req.params.id })
+      .populate('owner', 'nickname')
+      .populate('participants', 'nickname profileImage');
+      
     if (!room) {
       return res.redirect("/?error=존재하지 않는 방입니다.");
     }
 
-    const messages = await Chat.find({ room: room.channelId }).sort("createdAt");
+    // 참여자 목록에 사용자 추가
+    if (!room.participants.includes(req.user.id)) {
+      room.participants.push(req.user.id);
+      await room.save();
+    }
+
+    const messages = await Chat.find({ room: room._id })
+      .sort("createdAt")
+      .populate('user', 'nickname profileImage snsId provider');  // user 정보를 더 자세히 포함
+    
     return res.json({
       isSuccess: true,
       code: 200,
       message: "요청에 성공했습니다.",
-      result: { messages },
+      result: { 
+        room,  // 방 정보 (owner, participants 포함)
+        messages 
+      },
     });
   } catch (error) {
     console.error(error);
@@ -110,14 +132,20 @@ exports.sendChat = async (req, res, next) => {
   try {
     const chat = await Chat.create({
       room: req.params.roomId,
-      nickname: req.body.nickname,
+      user: req.user.id,
+      nickname: req.user.nickname,
       content: req.body.content,
       createdAt: new Date(),
       topic: -1,
     });
+
+    // 생성된 채팅 메시지에 user 정보를 포함하여 응답
+    const populatedChat = await Chat.findById(chat._id)
+      .populate('user', 'nickname profileImage snsId provider');
+
     const io = req.app.get("io");
-    io.of("/chat").to(req.params.id).emit("chat", chat);
-    res.json(chat);
+    io.of("/chat").to(req.params.id).emit("chat", populatedChat);
+    res.json(populatedChat);
   } catch (error) {
     console.error(error);
     next(error);

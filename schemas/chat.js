@@ -8,6 +8,11 @@ const chatSchema = new Schema({
     required: true,
     ref: 'Room',
   },
+  user: {
+    type: Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
   nickname: {
     type: String,
     required: true,

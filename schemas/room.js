@@ -11,7 +11,16 @@ const roomSchema = new Schema({
     default: function() {
       return this._id.toString();
     }
-  }
+  },
+  owner: {
+    type: Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  participants: [{
+    type: Schema.Types.ObjectId,
+    ref: 'User'
+  }]
 }, {
   versionKey: false,
   id: false,

@@ -12,7 +12,17 @@ const userSchema = new Schema({
     default: function() {
       return this._id.toString();
     }
-  }
+  },
+  snsId: {
+    type: String,
+    unique: true,
+  },
+  provider: {
+    type: String,
+    required: true,
+  },
+  profileImage: String,
+  email: String
 }, {
   versionKey: false,
   id: false,

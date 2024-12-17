@@ -31,6 +31,8 @@ const classifyTopics = async (roomId, howmany = 100) => {
       throw new Error('Invalid response from model server');
     }
 
+    
+
     const {topics, summaries} = response.data
 
     const result = {
