@@ -37,9 +37,31 @@ exports.registerUser = async (req, res, next) => {
 // 생성된 모든 채팅방들의 목록을 전달
 exports.renderMain = async (req, res, next) => {
   try {
+    const user = await User.findById(req.user.id).populate('subscriptions');
+    const channels = await Room.find({
+      _id: { $in: user.subscriptions }
+    })
+      .populate('owner', 'nickname')
+      .populate('participants', 'nickname profileImage');
+    
+    res.json({
+      isSuccess: true,
+      code: 200,
+      message: "요청에 성공했습니다.",
+      result: { channels },
+    });
+  } catch (error) {
+    console.error(error);
+    next(error);
+  }
+};
+
+exports.searchRooms = async (req, res, next) => {
+  try {
     const channels = await Room.find()
-      .populate('owner', 'nickname')  // owner의 정보 포함
-      .populate('participants', 'nickname profileImage');  // 참여자 정보 포함
+      .populate('owner', 'nickname')
+      .populate('participants', 'nickname profileImage')
+      .sort({ createdAt: -1 });
     
     res.json({
       isSuccess: true,
@@ -175,6 +197,46 @@ exports.classifyChat = async (req, res, next) => {
       code: 200,
       message: "요청에 성공했습니다.",
       result
+    });
+
+  } catch (error) {
+    console.error(error);
+    next(error);
+  }
+};
+
+exports.subscribeRoom = async (req, res, next) => {
+  try {
+    const roomId = req.params.roomId;
+    const userId = req.user.id;
+
+    // room의 participants와 user의 subscriptions 동시 업데이트
+    const [room, user] = await Promise.all([
+      Room.findByIdAndUpdate(
+        roomId,
+        { $addToSet: { participants: userId } },
+        { new: true }
+      ),
+      User.findByIdAndUpdate(
+        userId,
+        { $addToSet: { subscriptions: roomId } },
+        { new: true }
+      )
+    ]);
+
+    if (!room || !user) {
+      return res.status(404).json({
+        isSuccess: false,
+        code: 404,
+        message: "채팅방 또는 사용자를 찾을 수 없습니다."
+      });
+    }
+
+    res.json({
+      isSuccess: true,
+      code: 200,
+      message: "채팅방 구독에 성공했습니다.",
+      result: { room, user }
     });
 
   } catch (error) {

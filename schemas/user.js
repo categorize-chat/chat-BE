@@ -7,7 +7,6 @@ const userSchema = new Schema({
     required: true,
   },
   userId: {
-    // unique: true,
     type: String,
     default: function() {
       return this._id.toString();
@@ -21,7 +20,11 @@ const userSchema = new Schema({
     type: String,
     unique: true,
     required: true,
-  }
+  },
+  subscriptions: [{
+    type: Schema.Types.ObjectId,
+    ref: 'Room'
+  }]
 }, {
   versionKey: false,
   id: false,

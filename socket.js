@@ -1,4 +1,7 @@
 const SocketIO = require("socket.io");
+const Room = require("./schemas/room");
+const Chat = require("./schemas/chat");
+const User = require("./schemas/user");
 const { verifyToken } = require('./utils/jwt');
 
 module.exports = (server, app) => {
