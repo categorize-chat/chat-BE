@@ -32,7 +32,6 @@ const classifyTopics = async (roomId, howmany = 100) => {
     }
 
     
-
     const {topics, summaries} = response.data
 
     const result = {

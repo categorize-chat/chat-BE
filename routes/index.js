@@ -3,7 +3,7 @@ const cors = require('cors');
 const { authMiddleware } = require('../middlewares/auth');
 
 const {
-  registerUser, renderMain, createRoom, enterRoom, sendChat, classifyChat, searchRooms
+  registerUser, renderMain, createRoom, enterRoom, sendChat, classifyChat, searchRooms, subscribeRoom
 } = require('../controllers');
 
 const router = express.Router();

@@ -2,6 +2,7 @@ const Room = require("../schemas/room");
 const Chat = require("../schemas/chat");
 const User = require("../schemas/user");
 const classifyTopics = require('../services/chatClassifier');
+const mongoose = require('mongoose');
 
 // client로부터 받은 닉네임으로 DB에 새로운 User 생성
 exports.registerUser = async (req, res, next) => { 
@@ -81,26 +82,42 @@ exports.createRoom = async (req, res, next) => {
     const exist = await Room.findOne({ channelName: req.body.channelName }); // 채팅방 이름 중복 확인
 
     if (!exist) {
-      const newRoom = await Room.create({
-        channelName: req.body.channelName,
-        owner: req.user.id,  // 로그인한 사용자를 owner로 지정
-        participants: [req.user.id]  // 생성자를 첫 참여자로 추가
-      });
+      try {
+        // 1. 새로운 방 생성
+        const newRoom = await Room.create({
+          channelName: req.body.channelName,
+          owner: req.user.id,
+          participants: [req.user.id]
+        });
 
-      const io = req.app.get("io");
-      io.of("/room").emit("newRoom", newRoom); // 새로운 채팅방이 생성되었음을 모든 클라이언트에게 알림
+        // 2. 유저의 구독 목록에 새로운 방 추가
+        await User.findByIdAndUpdate(
+          req.user.id,
+          { $addToSet: { subscriptions: newRoom._id } }
+        );
+        
+        const io = req.app.get("io");
+        io.of("/room").emit("newRoom", newRoom); // 새로운 채팅방이 생성되었음을 모든 클라이언트에게 알림
 
-      res.json({
-        isSuccess: true,
-        code: 200,
-        message: "요청에 성공했습니다.",
-        result: {
-          channelId: newRoom.channelId,
-          channelName: newRoom.channelName,
-          owner: newRoom.owner,
-          participants: newRoom.participants
-        },
-      });
+        res.json({
+          isSuccess: true,
+          code: 200,
+          message: "요청에 성공했습니다.",
+          result: {
+            channelId: newRoom.channelId,
+            channelName: newRoom.channelName,
+            owner: newRoom.owner,
+            participants: newRoom.participants
+          },
+        });
+      } catch (error) {
+        console.error('Room Creation Error:', error);
+        res.status(500).json({
+          isSuccess: false,
+          code: 500,
+          message: "채팅방 생성 중 오류가 발생했습니다."
+        });
+      }
     } else {
       res.json({
         isSuccess: false,
@@ -109,7 +126,7 @@ exports.createRoom = async (req, res, next) => {
       });
     }
   } catch (error) {
-    console.error(error);
+    console.error('Create Room Error:', error);
     next(error);
   }
 };
