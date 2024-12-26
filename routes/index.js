@@ -3,7 +3,7 @@ const cors = require('cors');
 const { authMiddleware } = require('../middlewares/auth');
 
 const {
-  registerUser, renderMain, createRoom, enterRoom, sendChat, classifyChat, searchRooms, subscribeRoom
+  registerUser, renderMain, createRoom, enterRoom, sendChat, classifyChat, searchRooms, subscribeRoom, getRooms
 } = require('../controllers');
 
 const router = express.Router();
@@ -14,7 +14,9 @@ router.post('/user', registerUser);
 
 router.get('/chat', authMiddleware, renderMain);
 
-router.get('/search', authMiddleware, searchRooms);
+router.get('/search', authMiddleware, getRooms);
+
+router.post('/search', authMiddleware, searchRooms);
 
 router.post('/subscribe/:roomId', authMiddleware, subscribeRoom);
 

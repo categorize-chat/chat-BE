@@ -57,9 +57,29 @@ exports.renderMain = async (req, res, next) => {
   }
 };
 
-exports.searchRooms = async (req, res, next) => {
+exports.getRooms = async (req, res, next) => {
   try {
     const channels = await Room.find()
+      .populate('owner', 'nickname')
+      .populate('participants', 'nickname profileImage')
+      .sort({ createdAt: -1 });
+    
+    res.json({
+      isSuccess: true,
+      code: 200,
+      message: "요청에 성공했습니다.",
+      result: { channels },
+    });
+  } catch (error) {
+    console.error(error);
+    next(error);
+  }
+};
+
+exports.searchRooms = async (req, res, next) => {
+  try {
+    const { search } = req.body;
+    const channels = await Room.find({ channelName: { $regex: search, $options: 'i' } })
       .populate('owner', 'nickname')
       .populate('participants', 'nickname profileImage')
       .sort({ createdAt: -1 });
@@ -139,26 +159,27 @@ exports.enterRoom = async (req, res, next) => {
       .populate('participants', 'nickname profileImage');
       
     if (!room) {
-      return res.redirect("/?error=존재하지 않는 방입니다.");
-    }
-
-    // 참여자 목록에 사용자 추가
-    if (!room.participants.includes(req.user.id)) {
-      room.participants.push(req.user.id);
-      await room.save();
+      return res.status(404).json({
+        isSuccess: false,
+        code: 404,
+        message: "존재하지 않는 방입니다."
+      });
     }
 
     const messages = await Chat.find({ room: room._id })
       .sort("createdAt")
-      .populate('user', 'nickname profileImage snsId provider');  // user 정보를 더 자세히 포함
+      .populate('user', 'nickname profileImage snsId provider');
+    
+    const isSubscribed = room.participants.some(p => p._id.toString() === req.user.id);
     
     return res.json({
       isSuccess: true,
       code: 200,
       message: "요청에 성공했습니다.",
       result: { 
-        room,  // 방 정보 (owner, participants 포함)
-        messages 
+        room,
+        messages,
+        isSubscribed
       },
     });
   } catch (error) {
