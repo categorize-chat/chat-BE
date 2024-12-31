@@ -72,13 +72,16 @@ module.exports = (server, app) => {
 
     socket.on("message", async (data) => {
       try {
+        // 먼저 현재 유저의 전체 정보를 가져옵니다
+        const currentUser = await User.findById(socket.user.id);
+        
         const chat = await Chat.create({
           room: data.roomId,
-          user: socket.user.id,
-          nickname: socket.user.nickname,
+          user: currentUser,  // User 객체 전체를 저장
           content: data.content,
           createdAt: new Date(),
         });
+        
         io.of("/chat").to(data.roomId).emit("chat", chat);
       } catch (error) {
         console.error(error);

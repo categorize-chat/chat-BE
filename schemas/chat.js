@@ -1,21 +1,16 @@
 const mongoose = require('mongoose');
+const User = require('./user');  // User 스키마 import
 
 const { Schema } = mongoose;
-const { Types: { ObjectId } } = Schema;
 const chatSchema = new Schema({
   room: {
-    type: ObjectId,
+    type: Schema.Types.ObjectId,
     required: true,
     ref: 'Room',
   },
   user: {
-    type: Schema.Types.ObjectId,
-    ref: 'User',
+    type: User.schema,  // User 스키마를 직접 참조
     required: true
-  },
-  nickname: {
-    type: String,
-    required: true,
   },
   content: String,
   createdAt: {
