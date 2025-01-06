@@ -117,8 +117,7 @@ module.exports = (server, app) => {
         });
     
         // populate로 user 정보를 포함하여 조회
-        const populatedChat = await Chat.findById(chat._id)
-          .populate('user', 'nickname email profileUrl');
+        const populatedChat = {...chat, user: currentUser}
         
         io.of("/chat").to(data.roomId).emit("chat", populatedChat);
       } catch (error) {
