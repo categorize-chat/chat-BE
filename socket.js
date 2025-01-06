@@ -6,20 +6,16 @@ const { verifyToken } = require('./utils/jwt');
 const user = require("./schemas/user");
 
 function validateAndSanitizeChat(content) {
-  // 기본적인 유효성 검사
   if (!content || typeof content !== 'string') {
     return { isValid: false, message: "올바른 채팅 내용을 입력해주세요." };
   }
 
-  // 문자열 trim
   const trimmedContent = content.trim();
   
-  // 길이 검사 (예: 최대 1000자)
   if (trimmedContent.length === 0 || trimmedContent.length > 1000) {
     return { isValid: false, message: "채팅은 1-1000자 사이여야 합니다." };
   }
 
-  // HTML 태그 이스케이프 처리
   const sanitizedContent = trimmedContent
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -44,7 +40,6 @@ module.exports = (server, app) => {
   const room = io.of("/room");
   const chat = io.of("/chat");
 
-  // Socket 인증 미들웨어
   const socketAuthMiddleware = (socket, next) => {
     const token = socket.handshake.auth.token;
     if (!token) {
@@ -82,7 +77,7 @@ module.exports = (server, app) => {
           await room.save();
     
           const user = await User.findById(socket.user.id)
-            .select('nickname profileImage');
+            .select('nickname profileUrl email'); // user.js 스키마에 맞게 수정
             
           socket.to(data).emit("join", {
             type: "system",
@@ -97,7 +92,6 @@ module.exports = (server, app) => {
 
     socket.on("message", async (data) => {
       try {
-        // 메시지 검증
         const validation = validateAndSanitizeChat(data.content);
         if (!validation.isValid) {
           return socket.emit("error", { 
@@ -105,19 +99,18 @@ module.exports = (server, app) => {
           });
         }
     
-        // 현재 유저 정보 조회
         const currentUser = await User.findById(socket.user.id);
         
-        // 검증된 내용으로 채팅 생성
         const chat = await Chat.create({
           room: data.roomId,
-          user: socket.user.id,  // ObjectId만 저장
+          user: socket.user.id,
           content: validation.sanitizedContent,
           createdAt: new Date(),
         });
     
-        // populate로 user 정보를 포함하여 조회
-        const populatedChat = {...chat, user: currentUser}
+        // user.js 스키마에 맞게 populate 필드 수정
+        const populatedChat = await Chat.findById(chat._id)
+          .populate('user', 'nickname profileUrl email');
         
         io.of("/chat").to(data.roomId).emit("chat", populatedChat);
       } catch (error) {
