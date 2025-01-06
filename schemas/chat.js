@@ -9,7 +9,8 @@ const chatSchema = new Schema({
     ref: 'Room',
   },
   user: {
-    type: User.schema,  // User 스키마를 직접 참조
+    type: Schema.Types.ObjectId,
+    ref: 'User',
     required: true
   },
   content: String,

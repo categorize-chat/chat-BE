@@ -3,6 +3,7 @@ const Room = require("./schemas/room");
 const Chat = require("./schemas/chat");
 const User = require("./schemas/user");
 const { verifyToken } = require('./utils/jwt');
+const user = require("./schemas/user");
 
 function validateAndSanitizeChat(content) {
   // 기본적인 유효성 검사
@@ -110,12 +111,14 @@ module.exports = (server, app) => {
         // 검증된 내용으로 채팅 생성
         const chat = await Chat.create({
           room: data.roomId,
-          user: currentUser,
+          user: currentUser.userId,
           content: validation.sanitizedContent,
           createdAt: new Date(),
         });
+
+        const return_chat = {...chat, user: currentUser};
         
-        io.of("/chat").to(data.roomId).emit("chat", chat);
+        io.of("/chat").to(data.roomId).emit("chat", return_chat);
       } catch (error) {
         console.error(error);
         socket.emit("error", { message: "메시지 저장 중 오류가 발생했습니다." });
