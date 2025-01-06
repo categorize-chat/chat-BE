@@ -168,7 +168,7 @@ exports.enterRoom = async (req, res, next) => {
 
     const messages = await Chat.find({ room: room._id })
       .sort("createdAt")
-      .populate('user', 'nickname profileImage snsId provider');
+      .populate('user', 'nickname profileImage email');
     
     const isSubscribed = room.participants.some(p => p._id.toString() === req.user.id);
     
