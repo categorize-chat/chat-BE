@@ -104,21 +104,23 @@ module.exports = (server, app) => {
             message: validation.message 
           });
         }
-
+    
         // 현재 유저 정보 조회
         const currentUser = await User.findById(socket.user.id);
         
         // 검증된 내용으로 채팅 생성
         const chat = await Chat.create({
           room: data.roomId,
-          user: currentUser.userId,
+          user: socket.user.id,  // ObjectId만 저장
           content: validation.sanitizedContent,
           createdAt: new Date(),
         });
-
-        const return_chat = {...chat, user: currentUser};
+    
+        // populate로 user 정보를 포함하여 조회
+        const populatedChat = await Chat.findById(chat._id)
+          .populate('user', 'nickname email profileUrl');
         
-        io.of("/chat").to(data.roomId).emit("chat", return_chat);
+        io.of("/chat").to(data.roomId).emit("chat", populatedChat);
       } catch (error) {
         console.error(error);
         socket.emit("error", { message: "메시지 저장 중 오류가 발생했습니다." });
