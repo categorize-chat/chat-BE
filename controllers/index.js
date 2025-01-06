@@ -43,7 +43,7 @@ exports.renderMain = async (req, res, next) => {
       _id: { $in: user.subscriptions }
     })
       .populate('owner', 'nickname')
-      .populate('participants', 'nickname profileImage');
+      .populate('participants', 'nickname profileUrl');
     
     res.json({
       isSuccess: true,
@@ -61,7 +61,7 @@ exports.getRooms = async (req, res, next) => {
   try {
     const channels = await Room.find()
       .populate('owner', 'nickname')
-      .populate('participants', 'nickname profileImage')
+      .populate('participants', 'nickname profileUrl')
       .sort({ createdAt: -1 });
     
     res.json({
@@ -95,7 +95,7 @@ exports.searchRooms = async (req, res, next) => {
       } 
     })
       .populate('owner', 'nickname')
-      .populate('participants', 'nickname profileImage')
+      .populate('participants', 'nickname profileUrl')
       .sort({ createdAt: -1 });
     
     res.json({
@@ -170,7 +170,7 @@ exports.enterRoom = async (req, res, next) => {
   try {
     const room = await Room.findOne({ _id: req.params.id })
       .populate('owner', 'nickname')
-      .populate('participants', 'nickname profileImage');
+      .populate('participants', 'nickname profileUrl');
       
     if (!room) {
       return res.status(404).json({
@@ -182,7 +182,7 @@ exports.enterRoom = async (req, res, next) => {
 
     const messages = await Chat.find({ room: room._id })
       .sort("createdAt")
-      .populate('user', 'nickname profileImage email');
+      .populate('user', 'nickname profileUrl email');
     
     const isSubscribed = room.participants.some(p => p._id.toString() === req.user.id);
     
@@ -260,7 +260,7 @@ exports.sendChat = async (req, res, next) => {
 
     // 생성된 채팅 메시지에 user 정보를 포함하여 응답
     const populatedChat = await Chat.findById(chat._id)
-      .populate('user', 'nickname profileImage snsId provider');
+      .populate('user', 'nickname profileUrl snsId provider');
 
     const io = req.app.get("io");
     io.of("/chat").to(req.params.id).emit("chat", populatedChat);
