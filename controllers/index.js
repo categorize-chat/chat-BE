@@ -78,8 +78,22 @@ exports.getRooms = async (req, res, next) => {
 
 exports.searchRooms = async (req, res, next) => {
   try {
-    const { search } = req.body.search;
-    const channels = await Room.find({ channelName: { $regex: search, $options: 'i' } })
+    const searchTerm = req.body.search; // 직접 search 값을 가져옴
+    
+    if (!searchTerm) {
+      return res.status(400).json({
+        isSuccess: false,
+        code: 400,
+        message: "검색어를 입력해주세요."
+      });
+    }
+
+    const channels = await Room.find({ 
+      channelName: { 
+        $regex: searchTerm, 
+        $options: 'i'  // case-insensitive 검색
+      } 
+    })
       .populate('owner', 'nickname')
       .populate('participants', 'nickname profileImage')
       .sort({ createdAt: -1 });
@@ -91,7 +105,7 @@ exports.searchRooms = async (req, res, next) => {
       result: { channels },
     });
   } catch (error) {
-    console.error(error);
+    console.error('Search Rooms Error:', error);
     next(error);
   }
 };
