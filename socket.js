@@ -4,6 +4,32 @@ const Chat = require("./schemas/chat");
 const User = require("./schemas/user");
 const { verifyToken } = require('./utils/jwt');
 
+function validateAndSanitizeChat(content) {
+  // 기본적인 유효성 검사
+  if (!content || typeof content !== 'string') {
+    return { isValid: false, message: "올바른 채팅 내용을 입력해주세요." };
+  }
+
+  // 문자열 trim
+  const trimmedContent = content.trim();
+  
+  // 길이 검사 (예: 최대 1000자)
+  if (trimmedContent.length === 0 || trimmedContent.length > 1000) {
+    return { isValid: false, message: "채팅은 1-1000자 사이여야 합니다." };
+  }
+
+  // HTML 태그 이스케이프 처리
+  const sanitizedContent = trimmedContent
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;')
+    .replace(/\//g, '&#x2F;');
+
+  return { isValid: true, sanitizedContent };
+}
+
 module.exports = (server, app) => {
   const io = SocketIO(server, {
     cors: {
@@ -48,21 +74,19 @@ module.exports = (server, app) => {
     socket.on("join", async (data) => {
       socket.join(data);
       
-      // 방 참여자 목록에 추가
       try {
         const room = await Room.findById(data);
         if (room && !room.participants.includes(socket.user.id)) {
           room.participants.push(socket.user.id);
           await room.save();
     
-          // 참여자 정보를 포함하여 이벤트 전송
           const user = await User.findById(socket.user.id)
             .select('nickname profileImage');
             
           socket.to(data).emit("join", {
             type: "system",
             message: `${socket.user.nickname}님이 입장하셨습니다.`,
-            user: user,  // 참여한 유저 정보 포함
+            user: user,
           });
         }
       } catch (error) {
@@ -72,13 +96,22 @@ module.exports = (server, app) => {
 
     socket.on("message", async (data) => {
       try {
-        // 먼저 현재 유저의 전체 정보를 가져옵니다
+        // 메시지 검증
+        const validation = validateAndSanitizeChat(data.content);
+        if (!validation.isValid) {
+          return socket.emit("error", { 
+            message: validation.message 
+          });
+        }
+
+        // 현재 유저 정보 조회
         const currentUser = await User.findById(socket.user.id);
         
+        // 검증된 내용으로 채팅 생성
         const chat = await Chat.create({
           room: data.roomId,
-          user: currentUser,  // User 객체 전체를 저장
-          content: data.content,
+          user: currentUser,
+          content: validation.sanitizedContent,
           createdAt: new Date(),
         });
         
@@ -94,7 +127,6 @@ module.exports = (server, app) => {
       const { referer } = socket.request.headers;
       const roomId = new URL(referer).pathname.split("/").at(-1);
       
-      // 방 참여자 목록에서 제거
       try {
         const room = await Room.findById(roomId);
         if (room) {

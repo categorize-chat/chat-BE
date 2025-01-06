@@ -23,8 +23,7 @@ module.exports = () => {
           nickname: profile.username || profile._json?.properties?.nickname,
           snsId: profile.id,
           provider: 'kakao',
-          profileImage: profile._json?.properties?.profile_image,
-          email: profile._json?.kakao_account?.email,
+          profileUrl: profile._json?.properties?.profile_image,
         });
         const tokens = generateToken(newUser);
         done(null, { user: newUser, tokens });

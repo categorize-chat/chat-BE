@@ -3,7 +3,6 @@ const jwt = require('jsonwebtoken');
 const User = require('../schemas/user');
 const { generateToken } = require('../utils/jwt');
 
-
 exports.authKakao = async (req, res, next) => {
   try {
     const { code } = req.body;
@@ -28,18 +27,14 @@ exports.authKakao = async (req, res, next) => {
     }).then(res => res.data).then(data => ({
       nickname: data.properties.nickname,
       profileUrl: data.properties.profile_image,
-      email: data.kakao_account.email,
     }));
 
-    // 기존 유저 확인. email 을 키로.
-    const exUser = await User.findOne({
-      email: user.email,
-    });
+    // 기존 유저 확인. _id를 키로 사용
+    const exUser = await User.findById(user._id);
 
     // 기존 유저가 없다면 새로 생성
     const targetUser = exUser || await User.create({
       nickname: user.nickname,
-      email: user.email,
       profileUrl: user.profileUrl,
     });
 

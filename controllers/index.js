@@ -78,7 +78,7 @@ exports.getRooms = async (req, res, next) => {
 
 exports.searchRooms = async (req, res, next) => {
   try {
-    const { search } = req.body;
+    const { search } = req.body.search;
     const channels = await Room.find({ channelName: { $regex: search, $options: 'i' } })
       .populate('owner', 'nickname')
       .populate('participants', 'nickname profileImage')
@@ -188,13 +188,58 @@ exports.enterRoom = async (req, res, next) => {
   }
 };
 
+function validateAndSanitizeChat(content) {
+  // 기본적인 유효성 검사
+  if (!content || typeof content !== 'string') {
+    return { isValid: false, message: "올바른 채팅 내용을 입력해주세요." };
+  }
+
+  // 문자열 trim
+  const trimmedContent = content.trim();
+  
+  // 길이 검사 (예: 최대 1000자)
+  if (trimmedContent.length === 0 || trimmedContent.length > 1000) {
+    return { isValid: false, message: "채팅은 1-1000자 사이여야 합니다." };
+  }
+
+  // HTML 태그 이스케이프 처리
+  const sanitizedContent = trimmedContent
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;')
+    .replace(/\//g, '&#x2F;');
+
+  return { isValid: true, sanitizedContent };
+}
+
 exports.sendChat = async (req, res, next) => {
   try {
+    // ObjectId 유효성 검사
+    if (!mongoose.isValidObjectId(req.params.roomId)) {
+      return res.status(400).json({
+        isSuccess: false,
+        code: 400,
+        message: "유효하지 않은 방 ID입니다."
+      });
+    }
+
+    // 채팅 내용 검증 및 sanitization
+    const validation = validateAndSanitizeChat(req.body.content);
+    if (!validation.isValid) {
+      return res.status(400).json({
+        isSuccess: false,
+        code: 400,
+        message: validation.message
+      });
+    }
+
     const chat = await Chat.create({
       room: req.params.roomId,
       user: req.user.id,
       nickname: req.user.nickname,
-      content: req.body.content,
+      content: validation.sanitizedContent,
       createdAt: new Date(),
       topic: -1,
     });
@@ -278,6 +323,128 @@ exports.subscribeRoom = async (req, res, next) => {
     });
 
   } catch (error) {
+    console.error(error);
+    next(error);
+  }
+};
+
+// 닉네임 유효성 검사를 위한 함수
+function validateAndSanitizeNickname(nickname) {
+  // 기본적인 유효성 검사
+  if (!nickname || typeof nickname !== 'string') {
+    return { isValid: false, message: "올바른 닉네임을 입력해주세요." };
+  }
+
+  // 문자열 trim
+  const trimmedNickname = nickname.trim();
+  
+  // 길이 검사
+  if (trimmedNickname.length === 0 || trimmedNickname.length > 30) {
+    return { isValid: false, message: "닉네임은 1-30자 사이여야 합니다." };
+  }
+
+  // 허용된 문자만 포함되어 있는지 검사 (알파벳, 숫자, 한글, 일부 특수문자만 허용)
+  const nicknameRegex = /^[a-zA-Z0-9가-힣_.-]+$/;
+  if (!nicknameRegex.test(trimmedNickname)) {
+    return { isValid: false, message: "닉네임에 허용되지 않은 문자가 포함되어 있습니다." };
+  }
+
+  return { isValid: true, sanitizedNickname: trimmedNickname };
+}
+
+// 유저 설정 조회
+exports.getUserSettings = async (req, res, next) => {
+  try {
+    // ObjectId 검증
+    if (!mongoose.isValidObjectId(req.user.id)) {
+      return res.status(400).json({
+        isSuccess: false,
+        code: 400,
+        message: "유효하지 않은 사용자 ID입니다."
+      });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({
+        isSuccess: false,
+        code: 404,
+        message: "사용자를 찾을 수 없습니다."
+      });
+    }
+
+    res.json({
+      isSuccess: true,
+      code: 200,
+      message: "요청에 성공했습니다.",
+      result: user
+    });
+  } catch (error) {
+    console.error(error);
+    next(error);
+  }
+};
+
+// 닉네임 변경
+exports.updateUserNickname = async (req, res, next) => {
+  try {
+    const { nickname } = req.body;
+
+    // ObjectId 검증
+    if (!mongoose.isValidObjectId(req.user.id)) {
+      return res.status(400).json({
+        isSuccess: false,
+        code: 400,
+        message: "유효하지 않은 사용자 ID입니다."
+      });
+    }
+    
+    // 닉네임 유효성 검사 및 sanitization
+    const validation = validateAndSanitizeNickname(nickname);
+    if (!validation.isValid) {
+      return res.status(400).json({
+        isSuccess: false,
+        code: 400,
+        message: validation.message
+      });
+    }
+
+    // 닉네임 업데이트 - sanitized된 닉네임 사용
+    const updatedUser = await User.findByIdAndUpdate(
+      req.user.id,
+      { nickname: validation.sanitizedNickname },
+      { 
+        new: true,
+        runValidators: true // 스키마 레벨의 유효성 검사 실행
+      }
+    );
+
+    if (!updatedUser) {
+      return res.status(404).json({
+        isSuccess: false,
+        code: 404,
+        message: "사용자를 찾을 수 없습니다."
+      });
+    }
+
+    res.json({
+      isSuccess: true,
+      code: 200,
+      message: "닉네임이 성공적으로 변경되었습니다.",
+      result: {
+        nickname: updatedUser.nickname
+      }
+    });
+  } catch (error) {
+    // MongoDB 에러 처리
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({
+        isSuccess: false,
+        code: 400,
+        message: "닉네임 형식이 올바르지 않습니다."
+      });
+    }
+
     console.error(error);
     next(error);
   }
