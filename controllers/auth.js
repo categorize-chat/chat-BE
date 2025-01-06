@@ -43,6 +43,8 @@ exports.authKakao = async (req, res, next) => {
       profileUrl: user.profileUrl,
     });
 
+    
+
     // JWT 토큰 발급
     const {accessToken, refreshToken} = generateToken(targetUser);
 
@@ -55,7 +57,7 @@ exports.authKakao = async (req, res, next) => {
       message: "요청에 성공했습니다.",
       result: {
         accessToken,
-        ...user,
+        ...targetUser,
       },
     });
 
