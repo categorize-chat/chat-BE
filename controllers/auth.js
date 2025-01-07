@@ -57,7 +57,9 @@ exports.authKakao = async (req, res, next) => {
       message: "요청에 성공했습니다.",
       result: {
         accessToken,
-        ...targetUser,
+        nickname: targetUser.nickname,
+        profileUrl: targetUser.profileUrl,
+        email: targetUser.email
       },
     });
 
