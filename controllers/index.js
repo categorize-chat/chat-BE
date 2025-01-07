@@ -369,8 +369,8 @@ function validateAndSanitizeNickname(nickname) {
   const trimmedNickname = nickname.trim();
   
   // 길이 검사
-  if (trimmedNickname.length === 0 || trimmedNickname.length > 30) {
-    return { isValid: false, message: "닉네임은 1-30자 사이여야 합니다." };
+  if (trimmedNickname.length === 0 || trimmedNickname.length > 15) {
+    return { isValid: false, message: "닉네임은 1-15자 사이여야 합니다." };
   }
 
   // 허용된 문자만 포함되어 있는지 검사 (알파벳, 숫자, 한글, 일부 특수문자만 허용)
