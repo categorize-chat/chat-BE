@@ -78,24 +78,40 @@ exports.getRooms = async (req, res, next) => {
 
 exports.searchRooms = async (req, res, next) => {
   try {
-    const searchTerm = req.body.search; // 직접 search 값을 가져옴
+    // 검색어 추출 및 검증
+    const searchTerm = req.body.search;
     
-    if (!searchTerm) {
+    // 입력값 검증
+    if (typeof searchTerm !== 'string') {
       return res.status(400).json({
         isSuccess: false,
         code: 400,
-        message: "검색어를 입력해주세요."
+        message: "검색어는 문자열이어야 합니다."
       });
     }
 
+    // 검색어 길이 제한
+    if (searchTerm.length > 100) {
+      return res.status(400).json({
+        isSuccess: false,
+        code: 400,
+        message: "검색어가 너무 깁니다."
+      });
+    }
+
+    // 특수문자 이스케이프 처리
+    const escapedSearchTerm = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    // 안전한 쿼리 실행
     const channels = await Room.find({ 
       channelName: { 
-        $regex: searchTerm, 
-        $options: 'i'  // case-insensitive 검색
+        $regex: new RegExp(escapedSearchTerm, 'i') 
       } 
     })
+      .limit(50) // 결과 수 제한
+      .select('channelName owner participants') // 필요한 필드만 선택
       .populate('owner', 'nickname')
-      .populate('participants', 'nickname profileUrl')
+      .populate('participants', 'nickname profileImage')
       .sort({ createdAt: -1 });
     
     res.json({
@@ -105,7 +121,7 @@ exports.searchRooms = async (req, res, next) => {
       result: { channels },
     });
   } catch (error) {
-    console.error('Search Rooms Error:', error);
+    console.error('Search rooms error:', error);
     next(error);
   }
 };
