@@ -6,6 +6,10 @@ const roomSchema = new Schema({
     type: String,
     required: true,
   },
+  description: {
+    type: String,
+    default: '',
+  },
   channelId: {
     type: String,
     default: function() {

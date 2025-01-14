@@ -108,10 +108,9 @@ exports.searchRooms = async (req, res, next) => {
         $regex: new RegExp(escapedSearchTerm, 'i') 
       } 
     })
-      .limit(50) // 결과 수 제한
-      .select('channelName owner participants') // 필요한 필드만 선택
-      .populate('owner', 'nickname')
-      .populate('participants', 'nickname profileImage')
+      .limit(50)
+      .populate('owner', 'nickname email profileUrl')
+      .populate('participants', 'nickname email profileUrl')
       .sort({ createdAt: -1 });
     
     res.json({
@@ -136,6 +135,7 @@ exports.createRoom = async (req, res, next) => {
         // 1. 새로운 방 생성
         const newRoom = await Room.create({
           channelName: req.body.channelName,
+          description: req.body.description || '', // description 추가
           owner: req.user.id,
           participants: [req.user.id]
         });
@@ -156,6 +156,7 @@ exports.createRoom = async (req, res, next) => {
           result: {
             channelId: newRoom.channelId,
             channelName: newRoom.channelName,
+            description: newRoom.description,
             owner: newRoom.owner,
             participants: newRoom.participants
           },
