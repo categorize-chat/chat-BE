@@ -125,29 +125,92 @@ exports.searchRooms = async (req, res, next) => {
   }
 };
 
+function validateAndSanitizeRoom(channelName, description) {
+  // 기본적인 유효성 검사
+  if (!channelName || typeof channelName !== 'string') {
+    return { isValid: false, message: "올바른 채팅방 이름을 입력해주세요." };
+  }
+
+  if (description && typeof description !== 'string') {
+    return { isValid: false, message: "올바른 설명을 입력해주세요." };
+  }
+
+  // 문자열 trim
+  const trimmedName = channelName.trim();
+  const trimmedDesc = description ? description.trim() : '';
+  
+  // 길이 검사
+  if (trimmedName.length < 2 || trimmedName.length > 30) {
+    return { isValid: false, message: "채팅방 이름은 2-30자 사이여야 합니다." };
+  }
+
+  if (trimmedDesc.length > 200) {
+    return { isValid: false, message: "채팅방 설명은 200자를 초과할 수 없습니다." };
+  }
+
+  // 허용된 문자만 포함되어 있는지 검사 (알파벳, 숫자, 한글, 일부 특수문자만 허용)
+  const nameRegex = /^[a-zA-Z0-9가-힣\s_.-]+$/;
+  if (!nameRegex.test(trimmedName)) {
+    return { isValid: false, message: "채팅방 이름에 허용되지 않은 문자가 포함되어 있습니다." };
+  }
+
+  // HTML 태그 이스케이프 처리
+  const sanitizedName = trimmedName
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;')
+    .replace(/\//g, '&#x2F;');
+
+  const sanitizedDesc = trimmedDesc
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;')
+    .replace(/\//g, '&#x2F;');
+
+  return { 
+    isValid: true, 
+    sanitizedName, 
+    sanitizedDesc 
+  };
+}
+
 // client로부터 받은 이름으로 DB에 새 채팅방 생성
 exports.createRoom = async (req, res, next) => {
   try {
-    const exist = await Room.findOne({ channelName: req.body.channelName }); // 채팅방 이름 중복 확인
+    // 입력값 검증 및 sanitization
+    const validation = validateAndSanitizeRoom(req.body.channelName, req.body.description);
+    if (!validation.isValid) {
+      return res.status(400).json({
+        isSuccess: false,
+        code: 400,
+        message: validation.message
+      });
+    }
+
+    const exist = await Room.findOne({ 
+      channelName: validation.sanitizedName 
+    });
 
     if (!exist) {
       try {
-        // 1. 새로운 방 생성
         const newRoom = await Room.create({
-          channelName: req.body.channelName,
-          description: req.body.description || '', // description 추가
+          channelName: validation.sanitizedName,
+          description: validation.sanitizedDesc,
           owner: req.user.id,
           participants: [req.user.id]
         });
 
-        // 2. 유저의 구독 목록에 새로운 방 추가
         await User.findByIdAndUpdate(
           req.user.id,
           { $addToSet: { subscriptions: newRoom._id } }
         );
         
         const io = req.app.get("io");
-        io.of("/room").emit("newRoom", newRoom); // 새로운 채팅방이 생성되었음을 모든 클라이언트에게 알림
+        io.of("/room").emit("newRoom", newRoom);
 
         res.json({
           isSuccess: true,
@@ -170,9 +233,9 @@ exports.createRoom = async (req, res, next) => {
         });
       }
     } else {
-      res.json({
+      res.status(409).json({
         isSuccess: false,
-        code: 404,
+        code: 409,
         message: "중복된 채팅방 이름입니다.",
       });
     }
