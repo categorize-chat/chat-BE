@@ -248,7 +248,12 @@ exports.createRoom = async (req, res, next) => {
 // 해당 채팅방의 모든 채팅 전달
 exports.enterRoom = async (req, res, next) => {
   try {
-    const room = await Room.findOne({ _id: req.params.id })
+    const roomId = req.params.id;
+    const cursor = req.query.cursor;
+    const limit = parseInt(req.query.limit) || 20;
+
+    // 방 정보 조회
+    const room = await Room.findOne({ _id: roomId })
       .populate('owner', 'nickname')
       .populate('participants', 'nickname profileUrl');
       
@@ -260,24 +265,51 @@ exports.enterRoom = async (req, res, next) => {
       });
     }
 
-    const messages = await Chat.find({ room: room._id })
-      .sort("createdAt")
+    // 채팅 메시지 쿼리 생성
+    let query = { room: room._id };
+    
+    if (cursor) {
+      const cursorMessage = await Chat.findById(cursor);
+      if (!cursorMessage) {
+        return res.status(400).json({
+          isSuccess: false,
+          code: 400,
+          message: "유효하지 않은 cursor입니다."
+        });
+      }
+      query.createdAt = { $lt: cursorMessage.createdAt };
+    }
+
+    // 남은 메시지 총 개수 확인
+    const remainingCount = await Chat.countDocuments(query);
+
+    // 실제로 가져올 메시지 개수 결정
+    const effectiveLimit = Math.min(limit, remainingCount);
+
+    // 메시지 조회
+    const messages = await Chat.find(query)
+      .sort({ createdAt: -1 })
+      .limit(effectiveLimit)
       .populate('user', 'nickname profileUrl email');
     
-    const isSubscribed = room.participants.some(p => p._id.toString() === req.user.id);
+    // 다음 페이지 존재 여부 확인
+    const hasNextPage = remainingCount > limit;
     
-    return res.json({
+    // 응답 데이터 구성
+    const responseData = {
       isSuccess: true,
       code: 200,
       message: "요청에 성공했습니다.",
       result: { 
         room,
-        messages,
-        isSubscribed
+        messages: messages.reverse(),
+        nextCursor: hasNextPage ? messages[0]._id : null,
       },
-    });
+    };
+
+    return res.json(responseData);
   } catch (error) {
-    console.error(error);
+    console.error('Enter room error:', error);
     return next(error);
   }
 };
@@ -413,6 +445,46 @@ exports.subscribeRoom = async (req, res, next) => {
       isSuccess: true,
       code: 200,
       message: "채팅방 구독에 성공했습니다.",
+      result: { room, user }
+    });
+
+  } catch (error) {
+    console.error(error);
+    next(error);
+  }
+};
+
+exports.unsubscribeRoom = async (req, res, next) => {
+  try {
+    const roomId = req.params.roomId;
+    const userId = req.user.id;
+
+    // room의 participants와 user의 subscriptions 동시 업데이트
+    const [room, user] = await Promise.all([
+      Room.findByIdAndUpdate(
+        roomId,
+        { $pull: { participants: userId } },
+        { new: true }
+      ),
+      User.findByIdAndUpdate(
+        userId,
+        { $pull: { subscriptions: roomId } },
+        { new: true }
+      )
+    ]);
+
+    if (!room || !user) {
+      return res.status(404).json({
+        isSuccess: false,
+        code: 404,
+        message: "채팅방 또는 사용자를 찾을 수 없습니다."
+      });
+    }
+
+    res.json({
+      isSuccess: true,
+      code: 200,
+      message: "채팅방 구독 해제에 성공했습니다.",
       result: { room, user }
     });
 

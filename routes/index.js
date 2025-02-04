@@ -4,7 +4,7 @@ const { authMiddleware } = require('../middlewares/auth');
 
 const {
   registerUser, renderMain, createRoom, enterRoom, sendChat, classifyChat, 
-  searchRooms, subscribeRoom, getRooms, getUserSettings, updateUserNickname
+  searchRooms, subscribeRoom, unsubscribeRoom, getRooms, getUserSettings, updateUserNickname
 } = require('../controllers');
 
 const router = express.Router();
@@ -20,6 +20,8 @@ router.get('/search', authMiddleware, getRooms);
 router.post('/search', authMiddleware, searchRooms);
 
 router.post('/subscribe/:roomId', authMiddleware, subscribeRoom);
+
+router.post('/unsubscribe/:roomId', authMiddleware, unsubscribeRoom);
 
 router.post('/chat', authMiddleware, createRoom);
 

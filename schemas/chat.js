@@ -22,10 +22,6 @@ const chatSchema = new Schema({
     type: Number,
     default: -1
   },
-  embedding: {
-    type: [Number],
-    default: null,
-  },
 });
 
 module.exports = mongoose.model('Chat', chatSchema);
