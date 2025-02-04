@@ -40,19 +40,29 @@ module.exports = (server, app) => {
   const room = io.of("/room");
   const chat = io.of("/chat");
 
-  const socketAuthMiddleware = (socket, next) => {
+  const socketAuthMiddleware = async (socket, next) => {
     const token = socket.handshake.auth.token;
     if (!token) {
       return next(new Error('Authentication error'));
     }
-
+  
     const { valid, decoded } = verifyToken(token);
     if (!valid) {
       return next(new Error('Invalid token'));
     }
-
-    socket.user = decoded;
-    next();
+  
+    // 제재 확인
+    try {
+      const user = await User.findById(decoded.id);
+      if (user.isBanned) {
+        return next(new Error('Account is banned'));
+      }
+      
+      socket.user = decoded;
+      next();
+    } catch (error) {
+      return next(error);
+    }
   };
 
   chat.use(socketAuthMiddleware);

@@ -1,4 +1,5 @@
 const { verifyToken } = require('../utils/jwt');
+const User = require("../schemas/user");
 
 const authMiddleware = async (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -12,7 +13,6 @@ const authMiddleware = async (req, res, next) => {
   }
 
   const accessToken = authHeader.split(' ')[1];
-
   const { valid, expired, decoded } = verifyToken(accessToken);
 
   if (!valid) {
@@ -23,7 +23,18 @@ const authMiddleware = async (req, res, next) => {
     });
   }
 
-  req.user = decoded;  // 검증된 사용자 정보를 req에 저장
+  req.user = decoded;
+  
+  // 제재 확인
+  const user = await User.findById(decoded.id);
+  if (user.isBanned) {
+    return res.status(403).json({
+      isSuccess: false,
+      code: 403,
+      message: "계정이 정지되었습니다."
+    });
+  }
+  
   next();
 };
 

@@ -21,6 +21,10 @@ const userSchema = new Schema({
     unique: true,
     required: true,
   },
+  isBanned: {
+    type: Boolean,
+    default: false
+  },
   subscriptions: [{
     type: Schema.Types.ObjectId,
     ref: 'Room'
