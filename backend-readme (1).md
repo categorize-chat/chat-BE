@@ -78,8 +78,12 @@ source venv/bin/activate  # Windows: venv\Scripts\activate
 
 2. 필요한 Python 패키지를 설치합니다:
 ```bash
-pip install -r requirements.txt
+# 외부 패키지 설치
+pip install quart tensorflow torch transformers sentence-transformers scikit-learn python-dotenv openai numpy
 ```
+
+> 📝 프로젝트에서는 Python 기본 내장 라이브러리인 re(정규표현식), os(운영체제), asyncio(비동기 처리), json, traceback, datetime, copy 등도 사용합니다. 이들은 Python 설치 시 기본으로 제공되므로 별도 설치가 필요하지 않습니다.
+
 
 3. AI 모델 서버를 실행합니다:
 ```bash
