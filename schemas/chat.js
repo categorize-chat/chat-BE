@@ -1,16 +1,17 @@
 const mongoose = require('mongoose');
+const User = require('./user');  // User 스키마 import
 
 const { Schema } = mongoose;
-const { Types: { ObjectId } } = Schema;
 const chatSchema = new Schema({
   room: {
-    type: ObjectId,
+    type: Schema.Types.ObjectId,
     required: true,
     ref: 'Room',
   },
-  nickname: {
-    type: String,
-    required: true,
+  user: {
+    type: Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
   },
   content: String,
   createdAt: {
@@ -20,10 +21,6 @@ const chatSchema = new Schema({
   topic: {
     type: Number,
     default: -1
-  },
-  embedding: {
-    type: [Number],
-    default: null,
   },
 });
 

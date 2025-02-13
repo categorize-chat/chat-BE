@@ -2,6 +2,7 @@ const Room = require("../schemas/room");
 const Chat = require("../schemas/chat");
 const User = require("../schemas/user");
 const classifyTopics = require('../services/chatClassifier');
+const mongoose = require('mongoose');
 
 // client로부터 받은 닉네임으로 DB에 새로운 User 생성
 exports.registerUser = async (req, res, next) => { 
@@ -37,7 +38,13 @@ exports.registerUser = async (req, res, next) => {
 // 생성된 모든 채팅방들의 목록을 전달
 exports.renderMain = async (req, res, next) => {
   try {
-    const channels = await Room.find(); // DB에서 지금까지 생성된 채팅방 조회
+    const user = await User.findById(req.user.id).populate('subscriptions');
+    const channels = await Room.find({
+      _id: { $in: user.subscriptions }
+    })
+      .populate('owner', 'nickname')
+      .populate('participants', 'nickname profileUrl');
+    
     res.json({
       isSuccess: true,
       code: 200,
@@ -50,37 +57,190 @@ exports.renderMain = async (req, res, next) => {
   }
 };
 
+exports.getRooms = async (req, res, next) => {
+  try {
+    const channels = await Room.find()
+      .populate('owner', 'nickname')
+      .populate('participants', 'nickname profileUrl')
+      .sort({ createdAt: -1 });
+    
+    res.json({
+      isSuccess: true,
+      code: 200,
+      message: "요청에 성공했습니다.",
+      result: { channels },
+    });
+  } catch (error) {
+    console.error(error);
+    next(error);
+  }
+};
+
+exports.searchRooms = async (req, res, next) => {
+  try {
+    // 검색어 추출 및 검증
+    const searchTerm = req.body.search;
+    
+    // 입력값 검증
+    if (typeof searchTerm !== 'string') {
+      return res.status(400).json({
+        isSuccess: false,
+        code: 400,
+        message: "검색어는 문자열이어야 합니다."
+      });
+    }
+
+    // 검색어 길이 제한
+    if (searchTerm.length > 100) {
+      return res.status(400).json({
+        isSuccess: false,
+        code: 400,
+        message: "검색어가 너무 깁니다."
+      });
+    }
+
+    // 특수문자 이스케이프 처리
+    const escapedSearchTerm = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    // 안전한 쿼리 실행
+    const channels = await Room.find({ 
+      channelName: { 
+        $regex: new RegExp(escapedSearchTerm, 'i') 
+      } 
+    })
+      .limit(50)
+      .populate('owner', 'nickname email profileUrl')
+      .populate('participants', 'nickname email profileUrl')
+      .sort({ createdAt: -1 });
+    
+    res.json({
+      isSuccess: true,
+      code: 200,
+      message: "요청에 성공했습니다.",
+      result: { channels },
+    });
+  } catch (error) {
+    console.error('Search rooms error:', error);
+    next(error);
+  }
+};
+
+function validateAndSanitizeRoom(channelName, description) {
+  // 기본적인 유효성 검사
+  if (!channelName || typeof channelName !== 'string') {
+    return { isValid: false, message: "올바른 채팅방 이름을 입력해주세요." };
+  }
+
+  if (description && typeof description !== 'string') {
+    return { isValid: false, message: "올바른 설명을 입력해주세요." };
+  }
+
+  // 문자열 trim
+  const trimmedName = channelName.trim();
+  const trimmedDesc = description ? description.trim() : '';
+  
+  // 길이 검사
+  if (trimmedName.length < 2 || trimmedName.length > 30) {
+    return { isValid: false, message: "채팅방 이름은 2-30자 사이여야 합니다." };
+  }
+
+  if (trimmedDesc.length > 200) {
+    return { isValid: false, message: "채팅방 설명은 200자를 초과할 수 없습니다." };
+  }
+
+  // 허용된 문자만 포함되어 있는지 검사 (알파벳, 숫자, 한글, 일부 특수문자만 허용)
+  const nameRegex = /^[a-zA-Z0-9가-힣\s_.-]+$/;
+  if (!nameRegex.test(trimmedName)) {
+    return { isValid: false, message: "채팅방 이름에 허용되지 않은 문자가 포함되어 있습니다." };
+  }
+
+  // HTML 태그 이스케이프 처리
+  const sanitizedName = trimmedName
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;')
+    .replace(/\//g, '&#x2F;');
+
+  const sanitizedDesc = trimmedDesc
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;')
+    .replace(/\//g, '&#x2F;');
+
+  return { 
+    isValid: true, 
+    sanitizedName, 
+    sanitizedDesc 
+  };
+}
+
 // client로부터 받은 이름으로 DB에 새 채팅방 생성
 exports.createRoom = async (req, res, next) => {
   try {
-    const exist = await Room.findOne({ channelName: req.body.channelName }); // 채팅방 이름 중복 확인
+    // 입력값 검증 및 sanitization
+    const validation = validateAndSanitizeRoom(req.body.channelName, req.body.description);
+    if (!validation.isValid) {
+      return res.status(400).json({
+        isSuccess: false,
+        code: 400,
+        message: validation.message
+      });
+    }
+
+    const exist = await Room.findOne({ 
+      channelName: validation.sanitizedName 
+    });
 
     if (!exist) {
-      const newRoom = await Room.create({
-        channelName: req.body.channelName,
-      });
+      try {
+        const newRoom = await Room.create({
+          channelName: validation.sanitizedName,
+          description: validation.sanitizedDesc,
+          owner: req.user.id,
+          participants: [req.user.id]
+        });
 
-      const io = req.app.get("io");
-      io.of("/room").emit("newRoom", newRoom); // 새로운 채팅방이 생성되었음을 모든 클라이언트에게 알림
+        await User.findByIdAndUpdate(
+          req.user.id,
+          { $addToSet: { subscriptions: newRoom._id } }
+        );
+        
+        const io = req.app.get("io");
+        io.of("/room").emit("newRoom", newRoom);
 
-      res.json({
-        isSuccess: true,
-        code: 200,
-        message: "요청에 성공했습니다.",
-        result: {
-          channelId: newRoom.channelId,
-          channelName: newRoom.channelName,
-        },
-      });
+        res.json({
+          isSuccess: true,
+          code: 200,
+          message: "요청에 성공했습니다.",
+          result: {
+            channelId: newRoom.channelId,
+            channelName: newRoom.channelName,
+            description: newRoom.description,
+            owner: newRoom.owner,
+            participants: newRoom.participants
+          },
+        });
+      } catch (error) {
+        console.error('Room Creation Error:', error);
+        res.status(500).json({
+          isSuccess: false,
+          code: 500,
+          message: "채팅방 생성 중 오류가 발생했습니다."
+        });
+      }
     } else {
-      res.json({
+      res.status(409).json({
         isSuccess: false,
-        code: 404,
+        code: 409,
         message: "중복된 채팅방 이름입니다.",
       });
     }
   } catch (error) {
-    console.error(error);
+    console.error('Create Room Error:', error);
     next(error);
   }
 };
@@ -88,36 +248,135 @@ exports.createRoom = async (req, res, next) => {
 // 해당 채팅방의 모든 채팅 전달
 exports.enterRoom = async (req, res, next) => {
   try {
-    const room = await Room.findOne({ channelId: req.params.id }); // 유효한 채널ID인지 검증
+    const roomId = req.params.id;
+    const cursor = req.query.cursor;
+    const limit = parseInt(req.query.limit) || 20;
+
+    // 방 정보 조회
+    const room = await Room.findOne({ _id: roomId })
+      .populate('owner', 'nickname')
+      .populate('participants', 'nickname profileUrl');
+      
     if (!room) {
-      return res.redirect("/?error=존재하지 않는 방입니다.");
+      return res.status(404).json({
+        isSuccess: false,
+        code: 404,
+        message: "존재하지 않는 방입니다."
+      });
     }
 
-    const messages = await Chat.find({ room: room.channelId }).sort("createdAt");
-    return res.json({
+    // 채팅 메시지 쿼리 생성
+    let query = { room: room._id };
+    
+    if (cursor) {
+      const cursorMessage = await Chat.findById(cursor);
+      if (!cursorMessage) {
+        return res.status(400).json({
+          isSuccess: false,
+          code: 400,
+          message: "유효하지 않은 cursor입니다."
+        });
+      }
+      query.createdAt = { $lt: cursorMessage.createdAt };
+    }
+
+    // 남은 메시지 총 개수 확인
+    const remainingCount = await Chat.countDocuments(query);
+
+    // 실제로 가져올 메시지 개수 결정
+    const effectiveLimit = Math.min(limit, remainingCount);
+
+    // 메시지 조회
+    const messages = await Chat.find(query)
+      .sort({ createdAt: -1 })
+      .limit(effectiveLimit)
+      .populate('user', 'nickname profileUrl email');
+    
+    // 다음 페이지 존재 여부 확인
+    const hasNextPage = remainingCount > limit;
+    
+    // 응답 데이터 구성
+    const responseData = {
       isSuccess: true,
       code: 200,
       message: "요청에 성공했습니다.",
-      result: { messages },
-    });
+      result: { 
+        room,
+        messages: messages.reverse(),
+        nextCursor: hasNextPage ? messages[0]._id : null,
+      },
+    };
+
+    return res.json(responseData);
   } catch (error) {
-    console.error(error);
+    console.error('Enter room error:', error);
     return next(error);
   }
 };
 
+function validateAndSanitizeChat(content) {
+  // 기본적인 유효성 검사
+  if (!content || typeof content !== 'string') {
+    return { isValid: false, message: "올바른 채팅 내용을 입력해주세요." };
+  }
+
+  // 문자열 trim
+  const trimmedContent = content.trim();
+  
+  // 길이 검사 (예: 최대 1000자)
+  if (trimmedContent.length === 0 || trimmedContent.length > 1000) {
+    return { isValid: false, message: "채팅은 1-1000자 사이여야 합니다." };
+  }
+
+  // HTML 태그 이스케이프 처리
+  const sanitizedContent = trimmedContent
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;')
+    .replace(/\//g, '&#x2F;');
+
+  return { isValid: true, sanitizedContent };
+}
+
 exports.sendChat = async (req, res, next) => {
   try {
+    // ObjectId 유효성 검사
+    if (!mongoose.isValidObjectId(req.params.roomId)) {
+      return res.status(400).json({
+        isSuccess: false,
+        code: 400,
+        message: "유효하지 않은 방 ID입니다."
+      });
+    }
+
+    // 채팅 내용 검증 및 sanitization
+    const validation = validateAndSanitizeChat(req.body.content);
+    if (!validation.isValid) {
+      return res.status(400).json({
+        isSuccess: false,
+        code: 400,
+        message: validation.message
+      });
+    }
+
     const chat = await Chat.create({
       room: req.params.roomId,
-      nickname: req.body.nickname,
-      content: req.body.content,
+      user: req.user.id,
+      nickname: req.user.nickname,
+      content: validation.sanitizedContent,
       createdAt: new Date(),
       topic: -1,
     });
+
+    // 생성된 채팅 메시지에 user 정보를 포함하여 응답
+    const populatedChat = await Chat.findById(chat._id)
+      .populate('user', 'nickname profileUrl snsId provider');
+
     const io = req.app.get("io");
-    io.of("/chat").to(req.params.id).emit("chat", chat);
-    res.json(chat);
+    io.of("/chat").to(req.params.id).emit("chat", populatedChat);
+    res.json(populatedChat);
   } catch (error) {
     console.error(error);
     next(error);
@@ -150,6 +409,208 @@ exports.classifyChat = async (req, res, next) => {
     });
 
   } catch (error) {
+    console.error(error);
+    next(error);
+  }
+};
+
+exports.subscribeRoom = async (req, res, next) => {
+  try {
+    const roomId = req.params.roomId;
+    const userId = req.user.id;
+
+    // room의 participants와 user의 subscriptions 동시 업데이트
+    const [room, user] = await Promise.all([
+      Room.findByIdAndUpdate(
+        roomId,
+        { $addToSet: { participants: userId } },
+        { new: true }
+      ),
+      User.findByIdAndUpdate(
+        userId,
+        { $addToSet: { subscriptions: roomId } },
+        { new: true }
+      )
+    ]);
+
+    if (!room || !user) {
+      return res.status(404).json({
+        isSuccess: false,
+        code: 404,
+        message: "채팅방 또는 사용자를 찾을 수 없습니다."
+      });
+    }
+
+    res.json({
+      isSuccess: true,
+      code: 200,
+      message: "채팅방 구독에 성공했습니다.",
+      result: { room, user }
+    });
+
+  } catch (error) {
+    console.error(error);
+    next(error);
+  }
+};
+
+exports.unsubscribeRoom = async (req, res, next) => {
+  try {
+    const roomId = req.params.roomId;
+    const userId = req.user.id;
+
+    // room의 participants와 user의 subscriptions 동시 업데이트
+    const [room, user] = await Promise.all([
+      Room.findByIdAndUpdate(
+        roomId,
+        { $pull: { participants: userId } },
+        { new: true }
+      ),
+      User.findByIdAndUpdate(
+        userId,
+        { $pull: { subscriptions: roomId } },
+        { new: true }
+      )
+    ]);
+
+    if (!room || !user) {
+      return res.status(404).json({
+        isSuccess: false,
+        code: 404,
+        message: "채팅방 또는 사용자를 찾을 수 없습니다."
+      });
+    }
+
+    res.json({
+      isSuccess: true,
+      code: 200,
+      message: "채팅방 구독 해제에 성공했습니다.",
+      result: { room, user }
+    });
+
+  } catch (error) {
+    console.error(error);
+    next(error);
+  }
+};
+
+// 닉네임 유효성 검사를 위한 함수
+function validateAndSanitizeNickname(nickname) {
+  // 기본적인 유효성 검사
+  if (!nickname || typeof nickname !== 'string') {
+    return { isValid: false, message: "올바른 닉네임을 입력해주세요." };
+  }
+
+  // 문자열 trim
+  const trimmedNickname = nickname.trim();
+  
+  // 길이 검사
+  if (trimmedNickname.length === 0 || trimmedNickname.length > 15) {
+    return { isValid: false, message: "닉네임은 1-15자 사이여야 합니다." };
+  }
+
+  // 허용된 문자만 포함되어 있는지 검사 (알파벳, 숫자, 한글, 일부 특수문자만 허용)
+  const nicknameRegex = /^[a-zA-Z0-9가-힣_.-]+$/;
+  if (!nicknameRegex.test(trimmedNickname)) {
+    return { isValid: false, message: "닉네임에 허용되지 않은 문자가 포함되어 있습니다." };
+  }
+
+  return { isValid: true, sanitizedNickname: trimmedNickname };
+}
+
+// 유저 설정 조회
+exports.getUserSettings = async (req, res, next) => {
+  try {
+    // ObjectId 검증
+    if (!mongoose.isValidObjectId(req.user.id)) {
+      return res.status(400).json({
+        isSuccess: false,
+        code: 400,
+        message: "유효하지 않은 사용자 ID입니다."
+      });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({
+        isSuccess: false,
+        code: 404,
+        message: "사용자를 찾을 수 없습니다."
+      });
+    }
+
+    res.json({
+      isSuccess: true,
+      code: 200,
+      message: "요청에 성공했습니다.",
+      result: user
+    });
+  } catch (error) {
+    console.error(error);
+    next(error);
+  }
+};
+
+// 닉네임 변경
+exports.updateUserNickname = async (req, res, next) => {
+  try {
+    const { nickname } = req.body;
+
+    // ObjectId 검증
+    if (!mongoose.isValidObjectId(req.user.id)) {
+      return res.status(400).json({
+        isSuccess: false,
+        code: 400,
+        message: "유효하지 않은 사용자 ID입니다."
+      });
+    }
+    
+    // 닉네임 유효성 검사 및 sanitization
+    const validation = validateAndSanitizeNickname(nickname);
+    if (!validation.isValid) {
+      return res.status(400).json({
+        isSuccess: false,
+        code: 400,
+        message: validation.message
+      });
+    }
+
+    // 닉네임 업데이트 - sanitized된 닉네임 사용
+    const updatedUser = await User.findByIdAndUpdate(
+      req.user.id,
+      { nickname: validation.sanitizedNickname },
+      { 
+        new: true,
+        runValidators: true // 스키마 레벨의 유효성 검사 실행
+      }
+    );
+
+    if (!updatedUser) {
+      return res.status(404).json({
+        isSuccess: false,
+        code: 404,
+        message: "사용자를 찾을 수 없습니다."
+      });
+    }
+
+    res.json({
+      isSuccess: true,
+      code: 200,
+      message: "닉네임이 성공적으로 변경되었습니다.",
+      result: {
+        nickname: updatedUser.nickname
+      }
+    });
+  } catch (error) {
+    // MongoDB 에러 처리
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({
+        isSuccess: false,
+        code: 400,
+        message: "닉네임 형식이 올바르지 않습니다."
+      });
+    }
+
     console.error(error);
     next(error);
   }
