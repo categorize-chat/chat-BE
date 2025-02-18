@@ -3,7 +3,6 @@ const Room = require("./schemas/room");
 const Chat = require("./schemas/chat");
 const User = require("./schemas/user");
 const { verifyToken } = require('./utils/jwt');
-const user = require("./schemas/user");
 
 function validateAndSanitizeChat(content) {
   if (!content || typeof content !== 'string') {
@@ -40,29 +39,20 @@ module.exports = (server, app) => {
   const room = io.of("/room");
   const chat = io.of("/chat");
 
-  const socketAuthMiddleware = async (socket, next) => {
+  // Socket 인증 미들웨어
+  const socketAuthMiddleware = (socket, next) => {
     const token = socket.handshake.auth.token;
     if (!token) {
       return next(new Error('Authentication error'));
     }
-  
+
     const { valid, decoded } = verifyToken(token);
     if (!valid) {
       return next(new Error('Invalid token'));
     }
-  
-    // 제재 확인
-    try {
-      const user = await User.findById(decoded.id);
-      if (user.isBanned) {
-        return next(new Error('Account is banned'));
-      }
-      
-      socket.user = decoded;
-      next();
-    } catch (error) {
-      return next(error);
-    }
+
+    socket.user = decoded;
+    next();
   };
 
   chat.use(socketAuthMiddleware);
@@ -87,7 +77,7 @@ module.exports = (server, app) => {
           await room.save();
     
           const user = await User.findById(socket.user.id)
-            .select('nickname profileUrl email'); // user.js 스키마에 맞게 수정
+            .select('nickname profileUrl');
             
           socket.to(data).emit("join", {
             type: "system",
@@ -102,6 +92,34 @@ module.exports = (server, app) => {
 
     socket.on("message", async (data) => {
       try {
+        const userId = socket.user.id;
+        const roomId = data.roomId;
+    
+        // 사용자 구독 정보 확인
+        const user = await User.findById(userId).select('subscriptions');
+        if (!user) {
+          return socket.emit("error", { 
+            message: "사용자를 찾을 수 없습니다." 
+          });
+        }
+    
+        // 구독 여부 확인
+        const isSubscribed = user.subscriptions.includes(roomId);
+        if (!isSubscribed) {
+          return socket.emit("error", { 
+            message: "구독하지 않은 채팅방입니다. 먼저 채팅방을 구독해주세요." 
+          });
+        }
+    
+        // 방 존재 여부 확인
+        const room = await Room.findById(roomId);
+        if (!room) {
+          return socket.emit("error", { 
+            message: "존재하지 않는 방입니다." 
+          });
+        }
+    
+        // 메시지 검증
         const validation = validateAndSanitizeChat(data.content);
         if (!validation.isValid) {
           return socket.emit("error", { 
@@ -109,45 +127,57 @@ module.exports = (server, app) => {
           });
         }
     
-        const currentUser = await User.findById(socket.user.id);
-        
+        // 검증된 내용으로 채팅 생성
         const chat = await Chat.create({
-          room: data.roomId,
-          user: socket.user.id,
+          room: roomId,
+          user: userId,
           content: validation.sanitizedContent,
           createdAt: new Date(),
         });
     
-        // user.js 스키마에 맞게 populate 필드 수정
+        // populate로 user 정보를 포함하여 조회
         const populatedChat = await Chat.findById(chat._id)
           .populate('user', 'nickname profileUrl email');
         
-        io.of("/chat").to(data.roomId).emit("chat", populatedChat);
+        io.of("/chat").to(roomId).emit("chat", populatedChat);
       } catch (error) {
-        console.error(error);
-        socket.emit("error", { message: "메시지 저장 중 오류가 발생했습니다." });
+        console.error('Message error:', error);
+        socket.emit("error", { 
+          message: "메시지 저장 중 오류가 발생했습니다." 
+        });
       }
     });
 
     socket.on("disconnect", async () => {
       console.log("chat 네임스페이스 접속 해제");
-      const { referer } = socket.request.headers;
-      const roomId = new URL(referer).pathname.split("/").at(-1);
       
       try {
-        const room = await Room.findById(roomId);
-        if (room) {
-          room.participants = room.participants.filter(id => id.toString() !== socket.user.id);
-          await room.save();
+        // 현재 소켓이 참여중인 모든 방 목록 가져오기
+        const rooms = Array.from(socket.rooms);
+        
+        // socket.rooms에는 자신의 socket.id도 포함되어 있으므로 제외
+        const chatRooms = rooms.filter(room => room !== socket.id);
+        
+        // 각 방에서 퇴장 처리
+        for (const roomId of chatRooms) {
+          if (!roomId) continue;  // roomId가 빈 문자열이면 스킵
+
+          const room = await Room.findById(roomId);
+          if (room) {
+            room.participants = room.participants.filter(
+              id => id.toString() !== socket.user.id
+            );
+            await room.save();
+
+            socket.to(roomId).emit("exit", {
+              type: "system",
+              message: `${socket.user.nickname}님이 퇴장하셨습니다.`,
+            });
+          }
         }
       } catch (error) {
         console.error('Room leave error:', error);
       }
-
-      socket.to(roomId).emit("exit", {
-        user: "system",
-        chat: `${socket.user.nickname}님이 퇴장하셨습니다.`,
-      });
     });
   });
 };

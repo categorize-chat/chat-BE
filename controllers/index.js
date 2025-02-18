@@ -60,6 +60,7 @@ exports.renderMain = async (req, res, next) => {
 exports.getRooms = async (req, res, next) => {
   try {
     const channels = await Room.find()
+      .limit(15)
       .populate('owner', 'nickname')
       .populate('participants', 'nickname profileUrl')
       .sort({ createdAt: -1 });
@@ -249,11 +250,32 @@ exports.createRoom = async (req, res, next) => {
 exports.enterRoom = async (req, res, next) => {
   try {
     const roomId = req.params.id;
+    const userId = req.user.id;
     const cursor = req.query.cursor;
     const limit = parseInt(req.query.limit) || 20;
 
+    // 사용자의 구독 정보 확인
+    const user = await User.findById(userId).select('subscriptions');
+    if (!user) {
+      return res.status(404).json({
+        isSuccess: false,
+        code: 404,
+        message: "사용자를 찾을 수 없습니다."
+      });
+    }
+
+    // 사용자가 해당 방을 구독하고 있는지 확인
+    const isSubscribed = user.subscriptions.includes(roomId);
+    if (!isSubscribed) {
+      return res.status(403).json({
+        isSuccess: false,
+        code: 403,
+        message: "구독하지 않은 채팅방입니다. 먼저 채팅방을 구독해주세요."
+      });
+    }
+
     // 방 정보 조회
-    const room = await Room.findOne({ _id: roomId })
+    const room = await Room.findById(roomId)
       .populate('owner', 'nickname')
       .populate('participants', 'nickname profileUrl');
       
@@ -265,11 +287,17 @@ exports.enterRoom = async (req, res, next) => {
       });
     }
 
-    // 채팅 메시지 쿼리 생성
-    let query = { room: room._id };
+    // 기본 쿼리: 해당 방의 메시지만 조회
+    const baseQuery = { room: room._id };
     
+    // cursor 기반 쿼리 설정
     if (cursor) {
-      const cursorMessage = await Chat.findById(cursor);
+      // cursor의 메시지가 해당 방의 것인지 확인
+      const cursorMessage = await Chat.findOne({
+        _id: cursor,
+        room: room._id
+      });
+
       if (!cursorMessage) {
         return res.status(400).json({
           isSuccess: false,
@@ -277,23 +305,22 @@ exports.enterRoom = async (req, res, next) => {
           message: "유효하지 않은 cursor입니다."
         });
       }
-      query.createdAt = { $lt: cursorMessage.createdAt };
+
+      // createdAt 조건 추가
+      baseQuery.createdAt = { $lt: cursorMessage.createdAt };
     }
 
-    // 남은 메시지 총 개수 확인
-    const remainingCount = await Chat.countDocuments(query);
-
-    // 실제로 가져올 메시지 개수 결정
-    const effectiveLimit = Math.min(limit, remainingCount);
+    // 메시지 총 개수 확인
+    const totalCount = await Chat.countDocuments(baseQuery);
 
     // 메시지 조회
-    const messages = await Chat.find(query)
+    const messages = await Chat.find(baseQuery)
       .sort({ createdAt: -1 })
-      .limit(effectiveLimit)
+      .limit(limit)
       .populate('user', 'nickname profileUrl email');
-    
+
     // 다음 페이지 존재 여부 확인
-    const hasNextPage = remainingCount > limit;
+    const hasNextPage = totalCount > messages.length;
     
     // 응답 데이터 구성
     const responseData = {
@@ -303,7 +330,7 @@ exports.enterRoom = async (req, res, next) => {
       result: { 
         room,
         messages: messages.reverse(),
-        nextCursor: hasNextPage ? messages[0]._id : null,
+        nextCursor: hasNextPage ? messages[messages.length - 1]._id : null,
       },
     };
 
@@ -342,12 +369,45 @@ function validateAndSanitizeChat(content) {
 
 exports.sendChat = async (req, res, next) => {
   try {
+    const roomId = req.params.roomId;
+    const userId = req.user.id;
+
     // ObjectId 유효성 검사
-    if (!mongoose.isValidObjectId(req.params.roomId)) {
+    if (!mongoose.isValidObjectId(roomId)) {
       return res.status(400).json({
         isSuccess: false,
         code: 400,
         message: "유효하지 않은 방 ID입니다."
+      });
+    }
+
+    // 사용자의 구독 정보 확인
+    const user = await User.findById(userId).select('subscriptions');
+    if (!user) {
+      return res.status(404).json({
+        isSuccess: false,
+        code: 404,
+        message: "사용자를 찾을 수 없습니다."
+      });
+    }
+
+    // 사용자가 해당 방을 구독하고 있는지 확인
+    const isSubscribed = user.subscriptions.includes(roomId);
+    if (!isSubscribed) {
+      return res.status(403).json({
+        isSuccess: false,
+        code: 403,
+        message: "구독하지 않은 채팅방입니다. 먼저 채팅방을 구독해주세요."
+      });
+    }
+
+    // 해당 방이 존재하는지 확인
+    const room = await Room.findById(roomId);
+    if (!room) {
+      return res.status(404).json({
+        isSuccess: false,
+        code: 404,
+        message: "존재하지 않는 방입니다."
       });
     }
 
@@ -362,9 +422,8 @@ exports.sendChat = async (req, res, next) => {
     }
 
     const chat = await Chat.create({
-      room: req.params.roomId,
-      user: req.user.id,
-      nickname: req.user.nickname,
+      room: roomId,
+      user: userId,
       content: validation.sanitizedContent,
       createdAt: new Date(),
       topic: -1,
@@ -372,11 +431,17 @@ exports.sendChat = async (req, res, next) => {
 
     // 생성된 채팅 메시지에 user 정보를 포함하여 응답
     const populatedChat = await Chat.findById(chat._id)
-      .populate('user', 'nickname profileUrl snsId provider');
+      .populate('user', 'nickname profileUrl email');
 
     const io = req.app.get("io");
-    io.of("/chat").to(req.params.id).emit("chat", populatedChat);
-    res.json(populatedChat);
+    io.of("/chat").to(roomId).emit("chat", populatedChat);
+    
+    res.json({
+      isSuccess: true,
+      code: 200,
+      message: "메시지를 전송했습니다.",
+      result: populatedChat
+    });
   } catch (error) {
     console.error(error);
     next(error);
@@ -387,11 +452,52 @@ exports.sendChat = async (req, res, next) => {
 exports.classifyChat = async (req, res, next) => {
   try {
     const { channelId, howmany } = req.body;
+    const userId = req.user.id;
+
     if (!channelId) {
-      return res.json({
+      return res.status(400).json({
         isSuccess: false,
         code: 400,
         message: "channelId가 필요합니다.",
+      });
+    }
+
+    // ObjectId 유효성 검사
+    if (!mongoose.isValidObjectId(channelId)) {
+      return res.status(400).json({
+        isSuccess: false,
+        code: 400,
+        message: "유효하지 않은 채널 ID입니다."
+      });
+    }
+
+    // 사용자의 구독 정보 확인
+    const user = await User.findById(userId).select('subscriptions');
+    if (!user) {
+      return res.status(404).json({
+        isSuccess: false,
+        code: 404,
+        message: "사용자를 찾을 수 없습니다."
+      });
+    }
+
+    // 사용자가 해당 방을 구독하고 있는지 확인
+    const isSubscribed = user.subscriptions.includes(channelId);
+    if (!isSubscribed) {
+      return res.status(403).json({
+        isSuccess: false,
+        code: 403,
+        message: "구독하지 않은 채팅방입니다. 먼저 채팅방을 구독해주세요."
+      });
+    }
+
+    // 방 존재 여부 확인
+    const room = await Room.findById(channelId);
+    if (!room) {
+      return res.status(404).json({
+        isSuccess: false,
+        code: 404,
+        message: "존재하지 않는 방입니다."
       });
     }
 
