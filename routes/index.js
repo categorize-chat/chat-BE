@@ -1,6 +1,9 @@
 const express = require('express');
 const cors = require('cors');
 const { authMiddleware } = require('../middlewares/auth');
+const { loginUser } = require('../controllers/auth');
+const { registerLocalUser } = require('../controllers/auth');
+const { logoutUser } = require('../controllers/auth');
 
 const {
   registerUser, renderMain, createRoom, enterRoom, sendChat, classifyChat, 
@@ -10,6 +13,12 @@ const {
 const router = express.Router();
 
 router.use(cors({credentials: true, origin: '*',}));
+
+router.post('/user/login', loginUser);
+
+router.post('/user/join', registerLocalUser);
+
+router.post('/user/logout', logoutUser);
 
 router.post('/user', registerUser);
 

@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const bcrypt = require('bcrypt');
 
 const { Schema } = mongoose;
 const userSchema = new Schema({
@@ -14,12 +15,15 @@ const userSchema = new Schema({
   },
   profileUrl: {
     type: String,
-    required: true,
+    default: null
   },
   email: {
     type: String,
     unique: true,
     required: true,
+  },
+  password: {
+    type: String,
   },
   isBanned: {
     type: Boolean,
@@ -35,5 +39,24 @@ const userSchema = new Schema({
   toJSON: { virtuals: true },
   toObject: { virtuals: true }
 });
+
+userSchema.pre('save', async function(next) {
+  if (this.password && this.isModified('password')) {
+    try {
+      const salt = await bcrypt.genSalt(10);
+      this.password = await bcrypt.hash(this.password, salt);
+      next();
+    } catch (error) {
+      next(error);
+    }
+  } else {
+    next();
+  }
+});
+
+userSchema.methods.comparePassword = async function(candidatePassword) {
+  if (!this.password) return false;
+  return await bcrypt.compare(candidatePassword, this.password);
+};
 
 module.exports = mongoose.model('User', userSchema);
