@@ -330,7 +330,7 @@ exports.enterRoom = async (req, res, next) => {
       result: { 
         room,
         messages: messages.reverse(),
-        nextCursor: hasNextPage ? messages[messages.length - 1]._id : null,
+        nextCursor: hasNextPage ? messages[0]._id : null,
       },
     };
 
