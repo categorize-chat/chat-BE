@@ -3,9 +3,9 @@ const passport = require('passport');
 const User = require('../schemas/user');
 const { verifyToken } = require('../utils/jwt');
 const router = express.Router();
-const { registerLocalUser } = require('../controllers/auth');
 
 const { authKakao } = require('../controllers/auth');
+const authController = require('../controllers/auth');
 
 
 // 카카오 로그인
@@ -13,9 +13,6 @@ const { authKakao } = require('../controllers/auth');
 
 // 카카오 콜백 처리
 router.post('/kakao', authKakao);
-
-// 로컬 회원가입
-router.post('/join', registerLocalUser);
 
 // 토큰 갱신
 router.post('/refresh', async (req, res) => {
@@ -86,5 +83,11 @@ router.get('/check',
     });
   }
 );
+
+// 이메일 인증
+router.get('/verify/:token', authController.verifyEmail);
+
+// 인증 이메일 재발송
+router.post('/resend-verification', authController.resendVerification);
 
 module.exports = router;

@@ -32,7 +32,13 @@ const userSchema = new Schema({
   subscriptions: [{
     type: Schema.Types.ObjectId,
     ref: 'Room'
-  }]
+  }],
+  isVerified: {
+    type: Boolean,
+    default: false
+  },
+  verificationToken: String,
+  verificationTokenExpires: Date
 }, {
   versionKey: false,
   id: false,
@@ -57,6 +63,13 @@ userSchema.pre('save', async function(next) {
 userSchema.methods.comparePassword = async function(candidatePassword) {
   if (!this.password) return false;
   return await bcrypt.compare(candidatePassword, this.password);
+};
+
+userSchema.methods.generateVerificationToken = function() {
+  const crypto = require('crypto');
+  this.verificationToken = crypto.randomBytes(32).toString('hex');
+  this.verificationTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24시간
+  return this.verificationToken;
 };
 
 module.exports = mongoose.model('User', userSchema);
