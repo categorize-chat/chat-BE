@@ -85,7 +85,7 @@ router.get('/check',
 );
 
 // 이메일 인증
-router.get('/verify/:token', authController.verifyEmail);
+router.post('/verify/:token', authController.verifyEmail);
 
 // 인증 이메일 재발송
 router.post('/resend-verification', authController.resendVerification);
