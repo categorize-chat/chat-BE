@@ -296,23 +296,18 @@ exports.resendVerification = async (req, res) => {
       });
     }
 
-    // 임시 저장소에서 토큰으로 사용자 찾기
-    let found = false;
-    for (const [token, data] of tempUsers.entries()) {
-      if (data.data.email === email) {
-        await sendVerificationEmail(email, token);
-        found = true;
-        break;
-      }
-    }
+    // 임시 저장소에서 이메일로 사용자 찾기
+    let token = tempStorage.getTokenByEmail(email);
 
-    if (!found) {
+    if (!token) {
       return res.status(404).json({
         isSuccess: false,
         code: 404,
         message: "가입 진행 중인 이메일을 찾을 수 없습니다."
       });
     }
+
+    await sendVerificationEmail(email, token);
 
     return res.status(200).json({
       isSuccess: true,

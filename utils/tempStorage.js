@@ -31,6 +31,16 @@ const tempStorage = {
     return userData.data;
   },
 
+  // 임시 사용자 존재 여부 확인 (email 사용)
+  getTokenByEmail: (email) => {
+    for (const [token, data] of tempUsers.entries()) {
+      if (data.data.email === email) {
+        return token;
+      }
+    }
+    return null;
+  },
+
   // 임시 사용자 삭제
   removeTemp: (token) => {
     tempUsers.delete(token);
