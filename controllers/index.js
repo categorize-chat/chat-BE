@@ -36,24 +36,58 @@ exports.registerUser = async (req, res, next) => {
 };
 
 // 생성된 모든 채팅방들의 목록을 전달
-exports.renderMain = async (req, res, next) => {
+exports.renderMain = async (req, res) => {
   try {
     const user = await User.findById(req.user.id).populate('subscriptions');
-    const channels = await Room.find({
-      _id: { $in: user.subscriptions }
-    })
-      .populate('owner', 'nickname')
-      .populate('participants', 'nickname profileUrl');
     
-    res.json({
+    if (!user) {
+      return res.status(404).json({
+        isSuccess: false,
+        code: 404,
+        message: "사용자를 찾을 수 없습니다."
+      });
+    }
+    
+    // 구독 중인 모든 채팅방 정보 가져오기
+    const rooms = await Room.find({
+      _id: { $in: user.subscriptions }
+    }).populate('owner participants');
+    
+    // 각 채팅방별 총 메시지 수와 안 읽은 메시지 수 계산
+    const roomsWithCounts = rooms.map(room => {
+      // 해당 방의 읽은 메시지 수 찾기
+      const readCountObj = user.readCounts.find(
+        rc => rc.room.toString() === room._id.toString()
+      );
+      
+      const readCount = readCountObj ? readCountObj.count : 0;
+      const unreadCount = Math.max(0, room.totalMessageCount - readCount);
+      
+      return {
+        _id: room._id,
+        title: room.title,
+        owner: room.owner,
+        participants: room.participants,
+        createdAt: room.createdAt,
+        totalMessageCount: room.totalMessageCount,
+        unreadCount: unreadCount
+      };
+    });
+    
+    return res.json({
       isSuccess: true,
       code: 200,
-      message: "요청에 성공했습니다.",
-      result: { channels },
+      message: "채팅방 목록 조회 성공",
+      result: { rooms: roomsWithCounts }
     });
+    
   } catch (error) {
-    console.error(error);
-    next(error);
+    console.error('Render main error:', error);
+    return res.status(500).json({
+      isSuccess: false,
+      code: 500,
+      message: "서버 오류"
+    });
   }
 };
 
@@ -719,5 +753,81 @@ exports.updateUserNickname = async (req, res, next) => {
 
     console.error(error);
     next(error);
+  }
+};
+
+// 안 읽은 메시지 수 조회
+exports.getUnreadCount = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const user = await User.findById(userId);
+    
+    if (!user) {
+      return res.status(404).json({
+        isSuccess: false,
+        code: 404,
+        message: "사용자를 찾을 수 없습니다."
+      });
+    }
+    
+    // 특정 방의 안 읽은 메시지 수
+    if (req.query.roomId) {
+      const roomId = req.query.roomId;
+      const room = await Room.findById(roomId);
+      
+      if (!room) {
+        return res.status(404).json({
+          isSuccess: false,
+          code: 404,
+          message: "채팅방을 찾을 수 없습니다."
+        });
+      }
+      
+      const readCountObj = user.readCounts.find(
+        rc => rc.room.toString() === roomId
+      );
+      
+      const readCount = readCountObj ? readCountObj.count : 0;
+      const unreadCount = Math.max(0, room.totalMessageCount - readCount);
+      
+      return res.json({
+        isSuccess: true,
+        code: 200,
+        message: "안 읽은 메시지 수 조회 성공",
+        result: { unreadCount }
+      });
+    }
+    
+    // 모든 구독 채팅방의 안 읽은 메시지 수
+    const rooms = await Room.find({
+      _id: { $in: user.subscriptions }
+    });
+    
+    const unreadCounts = {};
+    
+    for (const room of rooms) {
+      const roomId = room._id.toString();
+      const readCountObj = user.readCounts.find(
+        rc => rc.room.toString() === roomId
+      );
+      
+      const readCount = readCountObj ? readCountObj.count : 0;
+      unreadCounts[roomId] = Math.max(0, room.totalMessageCount - readCount);
+    }
+    
+    return res.json({
+      isSuccess: true,
+      code: 200,
+      message: "모든 채팅방의 안 읽은 메시지 수 조회 성공",
+      result: { unreadCounts }
+    });
+    
+  } catch (error) {
+    console.error('Unread count error:', error);
+    return res.status(500).json({
+      isSuccess: false,
+      code: 500,
+      message: "서버 오류"
+    });
   }
 };

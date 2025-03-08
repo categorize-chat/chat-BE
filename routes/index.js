@@ -7,7 +7,7 @@ const { logoutUser } = require('../controllers/auth');
 
 const {
   registerUser, renderMain, createRoom, enterRoom, sendChat, classifyChat, 
-  searchRooms, subscribeRoom, unsubscribeRoom, getRooms, getUserSettings, updateUserNickname
+  searchRooms, subscribeRoom, unsubscribeRoom, getRooms, getUserSettings, updateUserNickname, getUnreadCount
 } = require('../controllers');
 
 const router = express.Router();
@@ -43,5 +43,7 @@ router.post('/chat/:id', authMiddleware, sendChat);
 router.get('/settings', authMiddleware, getUserSettings);
 
 router.post('/settings/nickname-change', authMiddleware, updateUserNickname);
+
+router.get('/unread', authMiddleware, getUnreadCount);
 
 module.exports = router;

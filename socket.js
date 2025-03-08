@@ -67,14 +67,21 @@ module.exports = (server, app) => {
   chat.on("connection", (socket) => {
     console.log("chat 네임스페이스에 접속");
     
+    // 현재 사용자가 보고 있는 채팅방 ID를 저장
+    let currentViewingRoom = null;
+    
     socket.on("join", async (data) => {
       socket.join(data);
+      currentViewingRoom = data;
       
       try {
         const room = await Room.findById(data);
         if (room && !room.participants.includes(socket.user.id)) {
           room.participants.push(socket.user.id);
           await room.save();
+    
+          // 채팅방 입장 시 읽음 상태 업데이트
+          await updateUserReadCount(socket.user.id, data);
     
           const user = await User.findById(socket.user.id)
             .select('nickname profileUrl');
@@ -90,10 +97,25 @@ module.exports = (server, app) => {
       }
     });
 
+    // 사용자가 채팅방 화면을 보고 있을 때 읽음 상태 업데이트
+    socket.on("view", async (roomId) => {
+      currentViewingRoom = roomId;
+      try {
+        await updateUserReadCount(socket.user.id, roomId);
+      } catch (error) {
+        console.error('Update read count error:', error);
+      }
+    });
+    
+    // 사용자가 채팅방 화면을 벗어날 때
+    socket.on("leave", () => {
+      currentViewingRoom = null;
+    });
+
     socket.on("message", async (data) => {
       try {
         const userId = socket.user.id;
-        const roomId = data.roomId;
+        const roomId = data.room;
     
         // 사용자 구독 정보 확인
         const user = await User.findById(userId).select('subscriptions');
@@ -134,11 +156,21 @@ module.exports = (server, app) => {
           content: validation.sanitizedContent,
           createdAt: new Date(),
         });
-    
+        
+        // 1. Room의 totalMessageCount 증가 (원자적 연산)
+        await Room.updateOne(
+          { _id: roomId },
+          { $inc: { totalMessageCount: 1 } }
+        );
+        
+        // 2. 메시지 전송자의 읽음 상태 업데이트
+        await updateUserReadCount(userId, roomId);
+        
         // populate로 user 정보를 포함하여 조회
         const populatedChat = await Chat.findById(chat._id)
           .populate('user', 'nickname profileUrl email');
         
+        // 채팅 발송
         io.of("/chat").to(roomId).emit("chat", populatedChat);
       } catch (error) {
         console.error('Message error:', error);
@@ -181,3 +213,28 @@ module.exports = (server, app) => {
     });
   });
 };
+
+// 사용자의 읽음 상태 업데이트 함수
+async function updateUserReadCount(userId, roomId) {
+  const room = await Room.findById(roomId);
+  if (!room) return;
+  
+  // 이미 해당 방에 대한 읽음 기록이 있는 경우
+  const userWithReadCount = await User.findOne({
+    _id: userId,
+    "readCounts.room": roomId
+  });
+  
+  if (userWithReadCount) {
+    await User.updateOne(
+      { _id: userId, "readCounts.room": roomId },
+      { $set: { "readCounts.$.count": room.totalMessageCount } }
+    );
+  } else {
+    // 처음 해당 방의 메시지를 읽는 경우
+    await User.updateOne(
+      { _id: userId },
+      { $push: { readCounts: { room: roomId, count: room.totalMessageCount } } }
+    );
+  }
+}
