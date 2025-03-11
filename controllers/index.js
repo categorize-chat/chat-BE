@@ -54,9 +54,9 @@ exports.renderMain = async (req, res) => {
     }).populate('owner participants');
     
     // 각 채팅방별 총 메시지 수와 안 읽은 메시지 수 계산
-    const roomsWithCounts = rooms.map(room => {
+    const channelsWithCounts = rooms.map(room => {
       // 해당 방의 읽은 메시지 수 찾기
-      const readCountObj = user.readCounts.find(
+      const readCountObj = user.readCounts?.find(
         rc => rc.room.toString() === room._id.toString()
       );
       
@@ -65,7 +65,9 @@ exports.renderMain = async (req, res) => {
       
       return {
         _id: room._id,
-        title: room.title,
+        channelName: room.channelName,
+        description: room.description,
+        channelId: room.channelId,
         owner: room.owner,
         participants: room.participants,
         createdAt: room.createdAt,
@@ -78,7 +80,7 @@ exports.renderMain = async (req, res) => {
       isSuccess: true,
       code: 200,
       message: "채팅방 목록 조회 성공",
-      result: { rooms: roomsWithCounts }
+      result: { channels: channelsWithCounts }
     });
     
   } catch (error) {
