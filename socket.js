@@ -80,7 +80,7 @@ module.exports = (server, app) => {
           room.participants.push(socket.user.id);
           await room.save();
     
-          // 채팅방 입장 시 읽음 상태 업데이트
+          // 채팅방 입장 시 읽음 상태 업데이트 (모든 메시지를 읽은 것으로 처리)
           await updateUserReadCount(socket.user.id, data);
     
           const user = await User.findById(socket.user.id)
@@ -101,9 +101,12 @@ module.exports = (server, app) => {
     socket.on("view", async (roomId) => {
       currentViewingRoom = roomId;
       try {
+        console.log(`사용자 ${socket.user.nickname}(${socket.user.id})가 채팅방 ${roomId}를 보고 있습니다.`);
+        
+        // 채팅방을 보고 있으므로 모든 메시지를 읽은 것으로 처리
         await updateUserReadCount(socket.user.id, roomId);
       } catch (error) {
-        console.error('Update read count error:', error);
+        console.error('채팅방 읽음 상태 업데이트 오류:', error);
       }
     });
     
@@ -163,7 +166,7 @@ module.exports = (server, app) => {
           { $inc: { totalMessageCount: 1 } }
         );
         
-        // 2. 메시지 전송자의 읽음 상태 업데이트
+        // 2. 메시지 전송자의 읽음 상태 업데이트 (자신이 보낸 메시지는 읽은 것으로 처리)
         await updateUserReadCount(userId, roomId);
         
         // populate로 user 정보를 포함하여 조회
@@ -216,25 +219,48 @@ module.exports = (server, app) => {
 
 // 사용자의 읽음 상태 업데이트 함수
 async function updateUserReadCount(userId, roomId) {
-  const room = await Room.findById(roomId);
-  if (!room) return;
-  
-  // 이미 해당 방에 대한 읽음 기록이 있는 경우
-  const userWithReadCount = await User.findOne({
-    _id: userId,
-    "readCounts.room": roomId
-  });
-  
-  if (userWithReadCount) {
-    await User.updateOne(
-      { _id: userId, "readCounts.room": roomId },
-      { $set: { "readCounts.$.count": room.totalMessageCount } }
-    );
-  } else {
-    // 처음 해당 방의 메시지를 읽는 경우
+  try {
+    const room = await Room.findById(roomId);
+    if (!room) return;
+    
+    // 현재 방의 총 메시지 수 가져오기
+    const totalMessageCount = room.totalMessageCount;
+    
+    // 사용자 정보 가져오기
+    const user = await User.findById(userId);
+    if (!user) return;
+    
+    // readCounts가 없으면 초기화
+    if (!user.readCounts) {
+      await User.updateOne(
+        { _id: userId },
+        { $set: { readCounts: {} } }
+      );
+    }
+    
+    // 현재 사용자의 해당 방에 대한 읽음 상태
+    const currentReadCount = user.readCounts && user.readCounts[roomId] 
+      ? user.readCounts[roomId] 
+      : 0;
+    
+    // 사용자가 이미 최신 상태라면 업데이트하지 않음
+    if (currentReadCount >= totalMessageCount) {
+      return;
+    }
+    
+    // 객체 형태로 readCounts 업데이트
+    // MongoDB에서 동적 키를 사용하기 위한 표현식
+    const updateQuery = {};
+    updateQuery[`readCounts.${roomId}`] = totalMessageCount;
+    
     await User.updateOne(
       { _id: userId },
-      { $push: { readCounts: { room: roomId, count: room.totalMessageCount } } }
+      { $set: updateQuery }
     );
+    
+    // 간결한 디버깅 로그
+    console.log(`읽음 상태 업데이트: 사용자=${userId}, 방=${roomId}, 읽은 메시지 수=${totalMessageCount}`);
+  } catch (error) {
+    console.error('읽음 상태 업데이트 오류:', error);
   }
 }

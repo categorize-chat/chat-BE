@@ -56,11 +56,11 @@ exports.renderMain = async (req, res) => {
     // 각 채팅방별 총 메시지 수와 안 읽은 메시지 수 계산
     const channelsWithCounts = rooms.map(room => {
       // 해당 방의 읽은 메시지 수 찾기
-      const readCountObj = user.readCounts?.find(
-        rc => rc.room.toString() === room._id.toString()
-      );
+      const roomId = room._id.toString();
+      const readCount = user.readCounts && user.readCounts.get ? 
+        user.readCounts.get(roomId) || 0 : 
+        (user.readCounts && user.readCounts[roomId]) || 0;
       
-      const readCount = readCountObj ? readCountObj.count : 0;
       const unreadCount = Math.max(0, room.totalMessageCount - readCount);
       
       return {
@@ -774,8 +774,8 @@ exports.getUnreadCount = async (req, res) => {
     
     // 특정 방의 안 읽은 메시지 수
     if (req.query.roomId) {
-      const roomId = req.query.roomId;
-      const room = await Room.findById(roomId);
+      const queryRoomId = req.query.roomId;
+      const room = await Room.findById(queryRoomId);
       
       if (!room) {
         return res.status(404).json({
@@ -785,12 +785,12 @@ exports.getUnreadCount = async (req, res) => {
         });
       }
       
-      const readCountObj = user.readCounts.find(
-        rc => rc.room.toString() === roomId
-      );
+      const roomIdStr = room._id.toString();
+      const readCountValue = user.readCounts && user.readCounts.get ? 
+        user.readCounts.get(roomIdStr) || 0 : 
+        (user.readCounts && user.readCounts[roomIdStr]) || 0;
       
-      const readCount = readCountObj ? readCountObj.count : 0;
-      const unreadCount = Math.max(0, room.totalMessageCount - readCount);
+      const unreadCount = Math.max(0, room.totalMessageCount - readCountValue);
       
       return res.json({
         isSuccess: true,
@@ -808,13 +808,12 @@ exports.getUnreadCount = async (req, res) => {
     const unreadCounts = {};
     
     for (const room of rooms) {
-      const roomId = room._id.toString();
-      const readCountObj = user.readCounts.find(
-        rc => rc.room.toString() === roomId
-      );
+      const roomIdStr = room._id.toString();
+      const readCountValue = user.readCounts && user.readCounts.get ? 
+        user.readCounts.get(roomIdStr) || 0 : 
+        (user.readCounts && user.readCounts[roomIdStr]) || 0;
       
-      const readCount = readCountObj ? readCountObj.count : 0;
-      unreadCounts[roomId] = Math.max(0, room.totalMessageCount - readCount);
+      unreadCounts[roomIdStr] = Math.max(0, room.totalMessageCount - readCountValue);
     }
     
     return res.json({

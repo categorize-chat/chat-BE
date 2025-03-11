@@ -33,16 +33,11 @@ const userSchema = new Schema({
     type: Schema.Types.ObjectId,
     ref: 'Room'
   }],
-  readStatus: [{
-    room: {
-      type: Schema.Types.ObjectId,
-      ref: 'Room'
-    },
-    lastReadAt: {
-      type: Date,
-      default: Date.now
-    }
-  }],
+  readCounts: {
+    type: Map,
+    of: Number,
+    default: {}
+  },
   isVerified: {
     type: Boolean,
     default: false
