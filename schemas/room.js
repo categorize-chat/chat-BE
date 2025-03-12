@@ -24,12 +24,17 @@ const roomSchema = new Schema({
   participants: [{
     type: Schema.Types.ObjectId,
     ref: 'User'
-  }]
+  }],
+  totalMessageCount: {
+    type: Number,
+    default: 0
+  }
 }, {
   versionKey: false,
   id: false,
   toJSON: { virtuals: true },
-  toObject: { virtuals: true }
+  toObject: { virtuals: true },
+  timestamps: true
 });
 
 module.exports = mongoose.model('Room', roomSchema);

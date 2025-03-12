@@ -33,6 +33,11 @@ const userSchema = new Schema({
     type: Schema.Types.ObjectId,
     ref: 'Room'
   }],
+  readCounts: {
+    type: Map,
+    of: Number,
+    default: {}
+  },
   isVerified: {
     type: Boolean,
     default: false
