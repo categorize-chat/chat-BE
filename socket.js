@@ -89,27 +89,18 @@ module.exports = (server, app) => {
     let currentViewingRoom = null;
     
     socket.on("join", async (data) => {
-      socket.join(data);
-      currentViewingRoom = data;
-      
+      data.forEach(roomId => {  
+        console.log("채팅방 입장:", roomId, socket.user?.nickname);
+        socket.join(roomId);
+      });
+
       try {
-        const room = await Room.findById(data);
-        if (room && !room.participants.includes(socket.user.id)) {
-          room.participants.push(socket.user.id);
-          await room.save();
-    
-          // 채팅방 입장 시 읽음 상태 업데이트 (모든 메시지를 읽은 것으로 처리)
-          await updateUserReadCount(socket.user.id, data);
-    
-          const user = await User.findById(socket.user.id)
-            .select('nickname profileUrl');
-            
-          socket.to(data).emit("join", {
-            type: "system",
-            message: `${socket.user.nickname}님이 입장하셨습니다.`,
-            user: user,
-          });
-        }
+        // TODO: 채팅방에 유저 추가
+        // const room = await Room.findById(data);
+        // if (room && !room.participants.includes(socket.user.id)) {
+        //   room.participants.push(socket.user.id);
+        //   await room.save();
+        // }
       } catch (error) {
         console.error('Room join error:', error);
       }
@@ -117,7 +108,7 @@ module.exports = (server, app) => {
 
     // 사용자가 채팅방 화면을 보고 있을 때 읽음 상태 업데이트
     socket.on("view", async (roomId) => {
-      currentViewingRoom = roomId;
+        currentViewingRoom = roomId;
       try {
         console.log(`사용자 ${socket.user.nickname}(${socket.user.id})가 채팅방 ${roomId}를 보고 있습니다.`);
         
@@ -138,15 +129,15 @@ module.exports = (server, app) => {
       
       try {
         // 필수 데이터 확인
-        if (!data || !data.roomId || !data.content) {
+        if (!data || !data.room || !data.content) {
           console.error('잘못된 메시지 형식:', data);
           return socket.emit("error", { 
-            message: "메시지 형식이 올바르지 않습니다. roomId와 content가 필요합니다." 
+            message: "메시지 형식이 올바르지 않습니다. room과 content가 필요합니다." 
           });
         }
         
         const userId = socket.user.id;
-        const roomId = data.roomId;
+        const roomId = data.room;
     
         // 사용자 구독 정보 확인
         const user = await User.findById(userId).select('subscriptions');
