@@ -158,7 +158,15 @@ module.exports = (server, app) => {
         }
     
         // 방 존재 여부 확인
-        const room = await Room.findById(roomId);
+        const room = await Room.findById(roomId)
+          .populate({
+            path: 'lastMessage',
+            select: 'content createdAt',
+            populate: {
+              path: 'user',
+              select: 'nickname profileUrl'
+            }
+          });
         if (!room) {
           console.error('존재하지 않는 방:', roomId);
           return socket.emit("error", { 
@@ -187,10 +195,13 @@ module.exports = (server, app) => {
         
         console.log('채팅 생성 완료:', chat._id);
         
-        // 1. Room의 totalMessageCount 증가 (원자적 연산)
+        // 1. Room의 totalMessageCount 증가 및 lastMessage 업데이트 (원자적 연산)
         await Room.updateOne(
           { _id: roomId },
-          { $inc: { totalMessageCount: 1 } }
+          { 
+            $inc: { totalMessageCount: 1 },
+            $set: { lastMessage: chat._id }
+          }
         );
         
         // 2. 메시지 전송자의 읽음 상태 업데이트 (자신이 보낸 메시지는 읽은 것으로 처리)
@@ -229,7 +240,15 @@ module.exports = (server, app) => {
         for (const roomId of chatRooms) {
           if (!roomId) continue;  // roomId가 빈 문자열이면 스킵
 
-          const room = await Room.findById(roomId);
+          const room = await Room.findById(roomId)
+            .populate({
+              path: 'lastMessage',
+              select: 'content createdAt',
+              populate: {
+                path: 'user',
+                select: 'nickname profileUrl'
+              }
+            });
           if (room) {
             room.participants = room.participants.filter(
               id => id.toString() !== socket.user.id
@@ -252,7 +271,15 @@ module.exports = (server, app) => {
 // 사용자의 읽음 상태 업데이트 함수
 async function updateUserReadCount(userId, roomId) {
   try {
-    const room = await Room.findById(roomId);
+    const room = await Room.findById(roomId)
+      .populate({
+        path: 'lastMessage',
+        select: 'content createdAt',
+        populate: {
+          path: 'user',
+          select: 'nickname profileUrl'
+        }
+      });
     if (!room) return;
     
     // 현재 방의 총 메시지 수 가져오기
