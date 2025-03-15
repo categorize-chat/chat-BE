@@ -51,8 +51,16 @@ exports.renderMain = async (req, res) => {
     // 구독 중인 모든 채팅방 정보 가져오기
     const rooms = await Room.find({
       _id: { $in: user.subscriptions }
-    }).populate('owner participants');
-    
+    }).populate('owner participants')
+      .populate({
+        path: 'lastMessage',
+        select: 'content createdAt',
+        populate: {
+          path: 'user',
+          select: 'nickname profileUrl'
+        }
+      });
+
     // 각 채팅방별 총 메시지 수와 안 읽은 메시지 수 계산
     const channelsWithCounts = rooms.map(room => {
       // 해당 방의 읽은 메시지 수 찾기
@@ -72,7 +80,8 @@ exports.renderMain = async (req, res) => {
         participants: room.participants,
         createdAt: room.createdAt,
         totalMessageCount: room.totalMessageCount,
-        unreadCount: unreadCount
+        unreadCount: unreadCount,
+        lastMessage: room.lastMessage
       };
     });
     
@@ -99,8 +108,16 @@ exports.getRooms = async (req, res, next) => {
       .limit(15)
       .populate('owner', 'nickname')
       .populate('participants', 'nickname profileUrl')
+      .populate({
+        path: 'lastMessage',
+        select: 'content createdAt',
+        populate: {
+          path: 'user',
+          select: 'nickname profileUrl'
+        }
+      })
       .sort({ createdAt: -1 });
-    
+
     res.json({
       isSuccess: true,
       code: 200,
@@ -148,6 +165,14 @@ exports.searchRooms = async (req, res, next) => {
       .limit(50)
       .populate('owner', 'nickname email profileUrl')
       .populate('participants', 'nickname email profileUrl')
+      .populate({
+        path: 'lastMessage',
+        select: 'content createdAt',
+        populate: {
+          path: 'user',
+          select: 'nickname profileUrl'
+        }
+      })
       .sort({ createdAt: -1 });
     
     res.json({
@@ -313,7 +338,15 @@ exports.enterRoom = async (req, res, next) => {
     // 방 정보 조회
     const room = await Room.findById(roomId)
       .populate('owner', 'nickname')
-      .populate('participants', 'nickname profileUrl');
+      .populate('participants', 'nickname profileUrl')
+      .populate({
+        path: 'lastMessage',
+        select: 'content createdAt',
+        populate: {
+          path: 'user',
+          select: 'nickname profileUrl'
+        }
+      });
       
     if (!room) {
       return res.status(404).json({
@@ -438,7 +471,16 @@ exports.sendChat = async (req, res, next) => {
     }
 
     // 해당 방이 존재하는지 확인
-    const room = await Room.findById(roomId);
+    const room = await Room.findById(roomId)
+      .populate({
+        path: 'lastMessage',
+        select: 'content createdAt',
+        populate: {
+          path: 'user',
+          select: 'nickname profileUrl'
+        }
+      });
+
     if (!room) {
       return res.status(404).json({
         isSuccess: false,
@@ -528,7 +570,16 @@ exports.classifyChat = async (req, res, next) => {
     }
 
     // 방 존재 여부 확인
-    const room = await Room.findById(channelId);
+    const room = await Room.findById(channelId)
+      .populate({
+        path: 'lastMessage',
+        select: 'content createdAt',
+        populate: {
+          path: 'user',
+          select: 'nickname profileUrl'
+        }
+      });
+
     if (!room) {
       return res.status(404).json({
         isSuccess: false,
@@ -775,7 +826,15 @@ exports.getUnreadCount = async (req, res) => {
     // 특정 방의 안 읽은 메시지 수
     if (req.query.roomId) {
       const queryRoomId = req.query.roomId;
-      const room = await Room.findById(queryRoomId);
+      const room = await Room.findById(queryRoomId)
+        .populate({
+          path: 'lastMessage',
+          select: 'content createdAt',
+          populate: {
+            path: 'user',
+            select: 'nickname profileUrl'
+          }
+        });
       
       if (!room) {
         return res.status(404).json({

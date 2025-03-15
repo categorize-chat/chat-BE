@@ -28,6 +28,10 @@ const roomSchema = new Schema({
   totalMessageCount: {
     type: Number,
     default: 0
+  },
+  lastMessage: {
+    type: Schema.Types.ObjectId,
+    ref: 'Chat'
   }
 }, {
   versionKey: false,
