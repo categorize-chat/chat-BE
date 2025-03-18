@@ -4,6 +4,8 @@ const { authMiddleware } = require('../middlewares/auth');
 const { loginUser } = require('../controllers/auth');
 const { registerLocalUser } = require('../controllers/auth');
 const { logoutUser } = require('../controllers/auth');
+const upload = require('../middlewares/uploadMiddleware');
+const profileController = require('../controllers/profileController');
 
 const {
   registerUser, renderMain, createRoom, enterRoom, sendChat, classifyChat, 
@@ -45,5 +47,11 @@ router.get('/settings', authMiddleware, getUserSettings);
 router.post('/settings/nickname-change', authMiddleware, updateUserNickname);
 
 router.get('/unread', authMiddleware, getUnreadCount);
+
+router.post('/settings/profile-image', 
+  authMiddleware,
+  upload.single('profileImage'),
+  profileController.updateProfileImage
+);
 
 module.exports = router;

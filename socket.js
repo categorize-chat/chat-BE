@@ -216,6 +216,9 @@ module.exports = (server, app) => {
         // 채팅 발송
         io.of("/chat").to(roomId).emit("chat", populatedChat);
         
+        // 새로운 메시지가 도착했을 때 현재 채팅방을 보고 있는 모든 사용자의 읽음 상태 업데이트
+        updateActiveViewersReadCount(roomId, io);
+        
         console.log('채팅 발송 완료');
       } catch (error) {
         console.error('메시지 처리 오류:', error);
@@ -267,6 +270,23 @@ module.exports = (server, app) => {
     });
   });
 };
+
+// 새로운 함수: 현재 채팅방을 보고 있는 모든 사용자의 읽음 상태 업데이트
+async function updateActiveViewersReadCount(roomId, io) {
+  try {
+    // 해당 채팅방의 소켓 목록 가져오기
+    const sockets = await io.of('/chat').in(roomId).fetchSockets();
+    
+    for (const socket of sockets) {
+      // 소켓에 사용자 정보가 있고, 현재 보고 있는 채팅방이 해당 roomId와 일치하는 경우
+      if (socket.user && socket.currentViewingRoom === roomId) {
+        await updateUserReadCount(socket.user.id, roomId);
+      }
+    }
+  } catch (error) {
+    console.error('활성 사용자 읽음 상태 업데이트 오류:', error);
+  }
+}
 
 // 사용자의 읽음 상태 업데이트 함수
 async function updateUserReadCount(userId, roomId) {
