@@ -16,7 +16,7 @@ router.post('/kakao', authKakao);
 
 // 토큰 갱신
 router.post('/refresh', async (req, res) => {
-  const { refreshToken } = req.body;
+  const refreshToken = req.cookies.refreshToken;
   
   if (!refreshToken) {
     return res.status(401).json({
@@ -52,11 +52,20 @@ router.post('/refresh', async (req, res) => {
     const { generateToken } = require('../utils/jwt');
     const tokens = generateToken(user);
 
+    // refreshToken을 HttpOnly 쿠키로 설정
+    res.cookie('refreshToken', tokens.refreshToken, {
+      path: '/',
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production', // 개발 환경에서는 false
+    });
+
     res.json({
       isSuccess: true,
       code: 200,
       message: "토큰이 갱신되었습니다.",
-      result: tokens
+      result: {
+        accessToken: tokens.accessToken,
+      }
     });
   } catch (error) {
     console.error('Token refresh error:', error);

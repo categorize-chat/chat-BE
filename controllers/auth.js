@@ -202,7 +202,7 @@ exports.registerLocalUser = async (req, res, next) => {
     const verificationToken = crypto.randomBytes(32).toString('hex');
     
     // 임시 저장소에 저장
-    tempStorage.saveTemp(verificationToken, userObj);
+    await tempStorage.saveTemp(verificationToken, userObj);
 
     // 인증 이메일 발송
     await sendVerificationEmail(email, verificationToken);
@@ -252,7 +252,7 @@ exports.verifyEmail = async (req, res) => {
     const { token } = req.params;
 
     // 임시 저장소에서 사용자 정보 조회
-    const userData = tempStorage.getTemp(token);
+    const userData = await tempStorage.getTemp(token);
     if (!userData) {
       return res.status(400).json({
         isSuccess: false,
@@ -268,7 +268,7 @@ exports.verifyEmail = async (req, res) => {
     });
 
     // 임시 데이터 삭제
-    tempStorage.removeTemp(token);
+    await tempStorage.removeTemp(token);
 
     return res.status(200).json({
       isSuccess: true,
@@ -297,7 +297,7 @@ exports.resendVerification = async (req, res) => {
     }
 
     // 임시 저장소에서 이메일로 사용자 찾기
-    let token = tempStorage.getTokenByEmail(email);
+    let token = await tempStorage.getTokenByEmail(email);
 
     if (!token) {
       return res.status(404).json({
