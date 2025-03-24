@@ -27,14 +27,32 @@ exports.updateProfileImage = async (req, res, next) => {
       });
     }
     
+    // 마지막 프로필 업데이트 시간 확인
+    const currentTime = new Date();
+    if (user.lastProfileUpdate) {
+      const lastUpdate = new Date(user.lastProfileUpdate);
+      const timeDifferenceHours = (currentTime - lastUpdate) / (1000 * 60 * 60);
+      
+      // 마지막 업데이트 후 1시간이 지나지 않은 경우
+      if (timeDifferenceHours < 1) {
+        const remainingMinutes = Math.ceil(60 - (timeDifferenceHours * 60));
+        return res.status(429).json({
+          isSuccess: false,
+          code: 429,
+          message: `프로필 사진은 1시간에 한 번만 변경할 수 있습니다. ${remainingMinutes}분 후에 다시 시도해주세요.`
+        });
+      }
+    }
+    
     // 기존 프로필 이미지 URL 저장
     const existingProfileUrl = user.profileUrl;
     
     // S3에 새 이미지 업로드
     const imageUrl = await uploadProfileImage(req.file, userId);
     
-    // 사용자 프로필 URL 업데이트
+    // 사용자 프로필 URL 업데이트 및 마지막 업데이트 시간 기록
     user.profileUrl = imageUrl;
+    user.lastProfileUpdate = currentTime;
     await user.save();
     
     // 기존 이미지가 S3에 있었다면 삭제 (기본 이미지는 제외)
