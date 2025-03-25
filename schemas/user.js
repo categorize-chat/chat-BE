@@ -17,6 +17,10 @@ const userSchema = new Schema({
     type: String,
     default: null
   },
+  lastProfileUpdate: {
+    type: Date,
+    default: null
+  },
   email: {
     type: String,
     unique: true,
