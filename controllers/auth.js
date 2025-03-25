@@ -188,35 +188,73 @@ exports.registerLocalUser = async (req, res, next) => {
       });
     }
 
-    // 임시 사용자 객체 생성
-    const userObj = {
-      nickname,
-      email,
-      password,
-      provider: 'local',
-      profileUrl: "https://i.namu.wiki/i/UVVoIACG5XlxNksLitUb_U82uSi5vVlV7086nEtZfqXF0wNHBlpKJKMR9gBEekgUMZoSVr8NOl-JluZWy9De8q1dpwMg3ZMQuDR_GG7OdQXV49tS69czspC7FEP9vS3rC-cLIB6vEJ5oE0EBw_BN5g.webp"
-    };
+    // NODE_ENV가 development 또는 test인 경우 이메일 인증 생략
+    if (process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test' || true) {
+      // 이메일 인증 없이 바로 사용자 생성
+      const newUser = await User.create({
+        nickname,
+        email,
+        password,
+        isVerified: true, // 이메일 인증 완료 상태로 설정
+        provider: 'local',
+        profileUrl: "https://i.namu.wiki/i/UVVoIACG5XlxNksLitUb_U82uSi5vVlV7086nEtZfqXF0wNHBlpKJKMR9gBEekgUMZoSVr8NOl-JluZWy9De8q1dpwMg3ZMQuDR_GG7OdQXV49tS69czspC7FEP9vS3rC-cLIB6vEJ5oE0EBw_BN5g.webp"
+      });
 
-    // 인증 토큰 생성
-    const crypto = require('crypto');
-    const verificationToken = crypto.randomBytes(32).toString('hex');
-    
-    // 임시 저장소에 저장
-    await tempStorage.saveTemp(verificationToken, userObj);
+      // JWT 토큰 발급
+      const { accessToken, refreshToken } = generateToken(newUser);
 
-    // 인증 이메일 발송
-    await sendVerificationEmail(email, verificationToken);
+      // refreshToken을 HttpOnly 쿠키로 설정
+      res.cookie('refreshToken', refreshToken, {
+        path: '/',
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production', // 개발 환경에서는 false
+      });
 
-    // 응답
-    return res.status(200).json({
-      isSuccess: true,
-      code: 200,
-      message: "이메일을 확인하여 계정을 인증해주세요.",
-      result: {
-        email: email,
-        nickname: nickname,
-      }
-    });
+      // 응답 반환
+      return res.json({
+        isSuccess: true,
+        code: 200,
+        message: "회원가입이 완료되었습니다.",
+        result: {
+          userId: newUser._id,
+          nickname: newUser.nickname,
+          email: newUser.email,
+          accessToken,
+          profileUrl: newUser.profileUrl
+        }
+      });
+    } else {
+      // 프로덕션 환경에서는 기존 이메일 인증 절차 유지
+      // 임시 사용자 객체 생성
+      const userObj = {
+        nickname,
+        email,
+        password,
+        provider: 'local',
+        profileUrl: "https://i.namu.wiki/i/UVVoIACG5XlxNksLitUb_U82uSi5vVlV7086nEtZfqXF0wNHBlpKJKMR9gBEekgUMZoSVr8NOl-JluZWy9De8q1dpwMg3ZMQuDR_GG7OdQXV49tS69czspC7FEP9vS3rC-cLIB6vEJ5oE0EBw_BN5g.webp"
+      };
+
+      // 인증 토큰 생성
+      const crypto = require('crypto');
+      const verificationToken = crypto.randomBytes(32).toString('hex');
+      
+      // 임시 저장소에 저장
+      await tempStorage.saveTemp(verificationToken, userObj);
+
+      // 인증 이메일 발송
+      await sendVerificationEmail(email, verificationToken);
+
+      // 응답
+      return res.status(200).json({
+        isSuccess: true,
+        code: 200,
+        message: "이메일을 확인하여 계정을 인증해주세요.",
+        result: {
+          email: email,
+          nickname: nickname,
+        }
+      });
+    }
   } catch (error) {
     console.error('Registration error:', error);
     res.status(500).json({ error: error.message });

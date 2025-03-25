@@ -1,4 +1,3 @@
-
 const mongoose = require('mongoose');
 
 const { Schema } = mongoose;
@@ -41,5 +40,10 @@ const roomSchema = new Schema({
   toObject: { virtuals: true },
   timestamps: true
 });
+
+// 성능 최적화를 위한 인덱스 추가
+roomSchema.index({ owner: 1 });
+roomSchema.index({ participants: 1 });
+roomSchema.index({ channelId: 1 }, { unique: true });
 
 module.exports = mongoose.model('Room', roomSchema);
