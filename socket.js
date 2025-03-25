@@ -4,6 +4,10 @@ const Chat = require("./schemas/chat");
 const User = require("./schemas/user");
 const { verifyToken } = require('./utils/jwt');
 
+// 읽음 상태 업데이트 배치 처리를 위한 큐
+const readUpdateQueue = {};
+const READ_UPDATE_INTERVAL = 1000; // 1초마다 배치 처리 (기존 5초에서 변경)
+
 function validateAndSanitizeChat(content) {
   if (!content || typeof content !== 'string') {
     return { 
@@ -39,13 +43,28 @@ function validateAndSanitizeChat(content) {
   return { isValid: true, sanitizedContent };
 }
 
+// 읽음 상태 업데이트 큐에 추가
+function scheduleReadUpdate(userId, roomId) {
+  const key = `${userId}:${roomId}`;
+  if (!readUpdateQueue[key]) {
+    readUpdateQueue[key] = true;
+    setTimeout(() => {
+      updateUserReadCount(userId, roomId);
+      delete readUpdateQueue[key];
+    }, READ_UPDATE_INTERVAL);
+  }
+}
+
 module.exports = (server, app) => {
   const io = SocketIO(server, {
     cors: {
       origin: process.env.CLIENT_URL,
       credentials: true
     },
-    path: "/socket.io"
+    path: "/socket.io",
+    pingTimeout: 60000, // 소켓 타임아웃 60초로 설정
+    pingInterval: 25000, // 핑 간격 25초로 설정
+    transports: ['websocket', 'polling'] // 웹소켓 우선, 폴링은 대체수단
   });
 
   app.set("io", io);
@@ -89,13 +108,18 @@ module.exports = (server, app) => {
     let currentViewingRoom = null;
     
     socket.on("join", async (data) => {
-      data.forEach(roomId => {  
-        console.log("채팅방 입장:", roomId, socket.user?.nickname);
-        socket.join(roomId);
-      });
+      // 한 번에 모든 방에 join (성능 최적화)
+      socket.join(data);
+      
+      if (process.env.NODE_ENV !== 'production') {
+        data.forEach(roomId => {  
+          console.log("채팅방 입장:", roomId, socket.user?.nickname);
+        });
+      }
 
+      // DB 업데이트가 필요한 경우에만 수행
       try {
-        // TODO: 채팅방에 유저 추가
+        // TODO: 채팅방에 유저 추가 (필요한 경우만)
         // const room = await Room.findById(data);
         // if (room && !room.participants.includes(socket.user.id)) {
         //   room.participants.push(socket.user.id);
@@ -108,12 +132,14 @@ module.exports = (server, app) => {
 
     // 사용자가 채팅방 화면을 보고 있을 때 읽음 상태 업데이트
     socket.on("view", async (roomId) => {
-        currentViewingRoom = roomId;
+      currentViewingRoom = roomId;
       try {
-        console.log(`사용자 ${socket.user.nickname}(${socket.user.id})가 채팅방 ${roomId}를 보고 있습니다.`);
+        if (process.env.NODE_ENV !== 'production') {
+          console.log(`사용자 ${socket.user.nickname}(${socket.user.id})가 채팅방 ${roomId}를 보고 있습니다.`);
+        }
         
-        // 채팅방을 보고 있으므로 모든 메시지를 읽은 것으로 처리
-        await updateUserReadCount(socket.user.id, roomId);
+        // 읽음 상태 업데이트 배치 처리
+        scheduleReadUpdate(socket.user.id, roomId);
       } catch (error) {
         console.error('채팅방 읽음 상태 업데이트 오류:', error);
       }
@@ -125,7 +151,9 @@ module.exports = (server, app) => {
     });
 
     socket.on("message", async (data) => {
-      console.log('메시지 수신:', data);
+      if (process.env.NODE_ENV !== 'production') {
+        console.log('메시지 수신:', data);
+      }
       
       try {
         // 필수 데이터 확인
@@ -139,17 +167,12 @@ module.exports = (server, app) => {
         const userId = socket.user.id;
         const roomId = data.room;
     
-        // 사용자 구독 정보 확인
-        const user = await User.findById(userId).select('subscriptions');
-        if (!user) {
-          console.error('사용자를 찾을 수 없음:', userId);
-          return socket.emit("error", { 
-            message: "사용자를 찾을 수 없습니다." 
-          });
-        }
-    
-        // 구독 여부 확인
-        const isSubscribed = user.subscriptions.includes(roomId);
+        // 사용자 구독 여부 확인 (최적화: 전체 사용자 데이터 대신 구독 여부만 확인)
+        const isSubscribed = await User.exists({ 
+          _id: userId, 
+          subscriptions: roomId 
+        });
+        
         if (!isSubscribed) {
           console.error('구독하지 않은 채팅방:', { userId, roomId });
           return socket.emit("error", { 
@@ -157,17 +180,9 @@ module.exports = (server, app) => {
           });
         }
     
-        // 방 존재 여부 확인
-        const room = await Room.findById(roomId)
-          .populate({
-            path: 'lastMessage',
-            select: 'content createdAt',
-            populate: {
-              path: 'user',
-              select: 'nickname profileUrl'
-            }
-          });
-        if (!room) {
+        // 방 존재 여부 확인 (최적화: populate 없이 존재 여부만 확인)
+        const roomExists = await Room.exists({ _id: roomId });
+        if (!roomExists) {
           console.error('존재하지 않는 방:', roomId);
           return socket.emit("error", { 
             message: "존재하지 않는 방입니다." 
@@ -183,7 +198,9 @@ module.exports = (server, app) => {
           });
         }
     
-        console.log('메시지 저장 시작:', { roomId, userId, content: validation.sanitizedContent });
+        if (process.env.NODE_ENV !== 'production') {
+          console.log('메시지 저장 시작:', { roomId, userId, content: validation.sanitizedContent });
+        }
         
         // 검증된 내용으로 채팅 생성
         const chat = await Chat.create({
@@ -192,8 +209,6 @@ module.exports = (server, app) => {
           content: validation.sanitizedContent,
           createdAt: new Date(),
         });
-        
-        console.log('채팅 생성 완료:', chat._id);
         
         // 1. Room의 totalMessageCount 증가 및 lastMessage 업데이트 (원자적 연산)
         await Room.updateOne(
@@ -205,21 +220,18 @@ module.exports = (server, app) => {
         );
         
         // 2. 메시지 전송자의 읽음 상태 업데이트 (자신이 보낸 메시지는 읽은 것으로 처리)
-        await updateUserReadCount(userId, roomId);
+        scheduleReadUpdate(userId, roomId);
         
-        // populate로 user 정보를 포함하여 조회
+        // populate로 user 정보를 포함하여 조회 (최적화: 필요한 필드만 선택)
         const populatedChat = await Chat.findById(chat._id)
-          .populate('user', 'nickname profileUrl email');
-        
-        console.log('채팅 발송 준비 완료:', { chatId: chat._id, roomId });
+          .populate('user', 'nickname profileUrl email')
+          .lean(); // lean() 추가로 순수 자바스크립트 객체 반환
         
         // 채팅 발송
         io.of("/chat").to(roomId).emit("chat", populatedChat);
         
         // 새로운 메시지가 도착했을 때 현재 채팅방을 보고 있는 모든 사용자의 읽음 상태 업데이트
         updateActiveViewersReadCount(roomId, io);
-        
-        console.log('채팅 발송 완료');
       } catch (error) {
         console.error('메시지 처리 오류:', error);
         socket.emit("error", { 
@@ -239,29 +251,22 @@ module.exports = (server, app) => {
         // socket.rooms에는 자신의 socket.id도 포함되어 있으므로 제외
         const chatRooms = rooms.filter(room => room !== socket.id);
         
-        // 각 방에서 퇴장 처리
-        for (const roomId of chatRooms) {
-          if (!roomId) continue;  // roomId가 빈 문자열이면 스킵
-
-          const room = await Room.findById(roomId)
-            .populate({
-              path: 'lastMessage',
-              select: 'content createdAt',
-              populate: {
-                path: 'user',
-                select: 'nickname profileUrl'
-              }
-            });
-          if (room) {
-            room.participants = room.participants.filter(
-              id => id.toString() !== socket.user.id
-            );
-            await room.save();
-
+        // 각 방에서 퇴장 처리 (필요한 경우에만)
+        if (chatRooms.length > 0) {
+          for (const roomId of chatRooms) {
+            if (!roomId) continue;  // roomId가 빈 문자열이면 스킵
             socket.to(roomId).emit("exit", {
               type: "system",
               message: `${socket.user.nickname}님이 퇴장하셨습니다.`,
             });
+          }
+          
+          // 배치 업데이트: 한 번에 모든 방에서 사용자 제거
+          if (socket.user && socket.user.id) {
+            await Room.updateMany(
+              { _id: { $in: chatRooms } },
+              { $pull: { participants: socket.user.id } }
+            );
           }
         }
       } catch (error) {
@@ -280,7 +285,7 @@ async function updateActiveViewersReadCount(roomId, io) {
     for (const socket of sockets) {
       // 소켓에 사용자 정보가 있고, 현재 보고 있는 채팅방이 해당 roomId와 일치하는 경우
       if (socket.user && socket.currentViewingRoom === roomId) {
-        await updateUserReadCount(socket.user.id, roomId);
+        scheduleReadUpdate(socket.user.id, roomId);
       }
     }
   } catch (error) {
@@ -291,22 +296,16 @@ async function updateActiveViewersReadCount(roomId, io) {
 // 사용자의 읽음 상태 업데이트 함수
 async function updateUserReadCount(userId, roomId) {
   try {
-    const room = await Room.findById(roomId)
-      .populate({
-        path: 'lastMessage',
-        select: 'content createdAt',
-        populate: {
-          path: 'user',
-          select: 'nickname profileUrl'
-        }
-      });
+    // 방의 총 메시지 수만 가져오기 (최적화: 필요한 필드만 선택)
+    const room = await Room.findById(roomId).select('totalMessageCount').lean();
     if (!room) return;
     
-    // 현재 방의 총 메시지 수 가져오기
     const totalMessageCount = room.totalMessageCount;
     
-    // 사용자 정보 가져오기
-    const user = await User.findById(userId);
+    // 사용자의 현재 읽음 상태 가져오기 (최적화: 필요한 필드만 선택)
+    const readCountPath = `readCounts.${roomId}`;
+    const user = await User.findById(userId).select(readCountPath);
+    
     if (!user) return;
     
     // readCounts가 없으면 초기화
@@ -318,8 +317,8 @@ async function updateUserReadCount(userId, roomId) {
     }
     
     // 현재 사용자의 해당 방에 대한 읽음 상태
-    const currentReadCount = user.readCounts && user.readCounts[roomId] 
-      ? user.readCounts[roomId] 
+    const currentReadCount = user.readCounts && user.readCounts.get(roomId) 
+      ? user.readCounts.get(roomId) 
       : 0;
     
     // 사용자가 이미 최신 상태라면 업데이트하지 않음
@@ -337,8 +336,9 @@ async function updateUserReadCount(userId, roomId) {
       { $set: updateQuery }
     );
     
-    // 간결한 디버깅 로그
-    console.log(`읽음 상태 업데이트: 사용자=${userId}, 방=${roomId}, 읽은 메시지 수=${totalMessageCount}`);
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`읽음 상태 업데이트: 사용자=${userId}, 방=${roomId}, 읽은 메시지 수=${totalMessageCount}`);
+    }
   } catch (error) {
     console.error('읽음 상태 업데이트 오류:', error);
   }

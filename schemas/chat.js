@@ -24,4 +24,9 @@ const chatSchema = new Schema({
   },
 });
 
+// 성능 최적화를 위한 인덱스 추가
+chatSchema.index({ room: 1 });
+chatSchema.index({ user: 1 });
+chatSchema.index({ room: 1, createdAt: -1 });
+
 module.exports = mongoose.model('Chat', chatSchema);
