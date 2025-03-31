@@ -6,6 +6,7 @@ const bcrypt = require('bcrypt');
 const { sendVerificationEmail } = require('../services/emailService');
 const { generateVerificationToken } = require('../schemas/user');
 const tempStorage = require('../utils/tempStorage');
+const { normalizeEmail } = require('../utils/emailUtils');
 
 
 exports.authKakao = async (req, res, next) => {
@@ -25,7 +26,7 @@ exports.authKakao = async (req, res, next) => {
     }).then(res => res.data);
 
     const kakaoUserUrl = 'https://kapi.kakao.com/v2/user/me';
-    const user = await axios.get(kakaoUserUrl, {
+    const userData = await axios.get(kakaoUserUrl, {
       headers: {
         Authorization: `Bearer ${kakaoToken.access_token}`
       }
@@ -35,7 +36,16 @@ exports.authKakao = async (req, res, next) => {
       email: data.kakao_account.email,
     }));
 
-    // 기존 유저 확인. email 을 키로.
+    // 이메일 정규화
+    const normalizedEmail = normalizeEmail(userData.email);
+    
+    // 정규화된 이메일로 사용자 객체 생성
+    const user = {
+      ...userData,
+      email: normalizedEmail
+    };
+
+    // 기존 유저 확인. 정규화된 email을 키로.
     const exUser = await User.findOne({
       email: user.email,
     });
@@ -86,8 +96,11 @@ exports.loginUser = async (req, res, next) => {
       });
     }
 
-    // Email로 사용자 찾기
-    const user = await User.findOne({ email: email });
+    // 이메일 정규화
+    const normalizedEmail = normalizeEmail(email);
+
+    // Email로 사용자 찾기 (정규화된 이메일 사용)
+    const user = await User.findOne({ email: normalizedEmail });
     
     // 사용자가 없거나 비밀번호가 일치하지 않는 경우
     if (!user || !(await user.comparePassword(password))) {
@@ -160,8 +173,11 @@ exports.registerLocalUser = async (req, res, next) => {
       });
     }
 
-    // 이메일 중복 확인
-    const existingUser = await User.findOne({ email: email });
+    // 이메일 정규화
+    const normalizedEmail = normalizeEmail(email);
+
+    // 이메일 중복 확인 (정규화된 이메일 사용)
+    const existingUser = await User.findOne({ email: normalizedEmail });
     if (existingUser) {
       return res.status(409).json({
         isSuccess: false,
@@ -188,10 +204,10 @@ exports.registerLocalUser = async (req, res, next) => {
       });
     }
 
-    // 임시 사용자 객체 생성
+    // 임시 사용자 객체 생성 (정규화된 이메일 저장)
     const userObj = {
       nickname,
-      email,
+      email: normalizedEmail,
       password,
       provider: 'local',
       profileUrl: "https://i.namu.wiki/i/UVVoIACG5XlxNksLitUb_U82uSi5vVlV7086nEtZfqXF0wNHBlpKJKMR9gBEekgUMZoSVr8NOl-JluZWy9De8q1dpwMg3ZMQuDR_GG7OdQXV49tS69czspC7FEP9vS3rC-cLIB6vEJ5oE0EBw_BN5g.webp"
@@ -204,7 +220,7 @@ exports.registerLocalUser = async (req, res, next) => {
     // 임시 저장소에 저장
     await tempStorage.saveTemp(verificationToken, userObj);
 
-    // 인증 이메일 발송
+    // 인증 이메일 발송 (원본 이메일 사용 - 사용자에게 보내는 용도)
     await sendVerificationEmail(email, verificationToken);
 
     // 응답
@@ -286,8 +302,11 @@ exports.resendVerification = async (req, res) => {
   try {
     const { email } = req.body;
 
-    // 이미 가입된 사용자인지 확인
-    const existingUser = await User.findOne({ email });
+    // 이메일 정규화
+    const normalizedEmail = normalizeEmail(email);
+
+    // 이미 가입된 사용자인지 확인 (정규화된 이메일 사용)
+    const existingUser = await User.findOne({ email: normalizedEmail });
     if (existingUser) {
       return res.status(400).json({
         isSuccess: false,
@@ -296,8 +315,8 @@ exports.resendVerification = async (req, res) => {
       });
     }
 
-    // 임시 저장소에서 이메일로 사용자 찾기
-    let token = await tempStorage.getTokenByEmail(email);
+    // 임시 저장소에서 이메일로 사용자 찾기 (정규화된 이메일 사용)
+    let token = await tempStorage.getTokenByEmail(normalizedEmail);
 
     if (!token) {
       return res.status(404).json({
@@ -307,6 +326,7 @@ exports.resendVerification = async (req, res) => {
       });
     }
 
+    // 인증 이메일 발송 (원본 이메일 사용 - 사용자에게 보내는 용도)
     await sendVerificationEmail(email, token);
 
     return res.status(200).json({
