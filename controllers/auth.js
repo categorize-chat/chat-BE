@@ -319,3 +319,171 @@ exports.resendVerification = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+
+// 비밀번호 재설정 요청
+exports.requestPasswordReset = async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({
+        isSuccess: false,
+        code: 400,
+        message: "이메일을 입력해주세요."
+      });
+    }
+    
+    // 이메일로 사용자 찾기
+    const user = await User.findOne({ email: email });
+    
+    if (!user) {
+      return res.status(404).json({
+        isSuccess: false,
+        code: 404,
+        message: "등록되지 않은 이메일입니다."
+      });
+    }
+    
+    // 로컬 계정 확인
+    if (!user.password) {
+      return res.status(400).json({
+        isSuccess: false,
+        code: 400,
+        message: "소셜 로그인 계정은 비밀번호 재설정이 불가능합니다."
+      });
+    }
+    
+    // 인증된 계정 확인
+    if (!user.isVerified) {
+      return res.status(403).json({
+        isSuccess: false,
+        code: 403,
+        message: "이메일 인증이 완료되지 않은 계정입니다. 먼저 이메일 인증을 완료해주세요."
+      });
+    }
+    
+    // 비밀번호 재설정 토큰 생성
+    const resetToken = user.generatePasswordResetToken();
+    await user.save();
+    
+    // 비밀번호 재설정 이메일 발송
+    const { sendPasswordResetEmail } = require('../services/emailService');
+    await sendPasswordResetEmail(user.email, resetToken);
+    
+    return res.status(200).json({
+      isSuccess: true,
+      code: 200,
+      message: "비밀번호 재설정 이메일이 발송되었습니다. 이메일을 확인해주세요."
+    });
+  } catch (error) {
+    console.error('Password reset request error:', error);
+    return res.status(500).json({
+      isSuccess: false,
+      code: 500,
+      message: "서버 오류가 발생했습니다."
+    });
+  }
+};
+
+// 비밀번호 재설정 토큰 확인
+exports.verifyResetToken = async (req, res) => {
+  try {
+    const { token } = req.params;
+    
+    if (!token) {
+      return res.status(400).json({
+        isSuccess: false,
+        code: 400,
+        message: "토큰이 제공되지 않았습니다."
+      });
+    }
+    
+    // 토큰으로 사용자 찾기
+    const user = await User.findOne({
+      resetPasswordToken: token,
+      resetPasswordExpires: { $gt: Date.now() }
+    });
+    
+    if (!user) {
+      return res.status(400).json({
+        isSuccess: false,
+        code: 400,
+        message: "유효하지 않거나 만료된 토큰입니다."
+      });
+    }
+    
+    return res.status(200).json({
+      isSuccess: true,
+      code: 200,
+      message: "유효한 토큰입니다.",
+      result: {
+        email: user.email
+      }
+    });
+  } catch (error) {
+    console.error('Token verification error:', error);
+    return res.status(500).json({
+      isSuccess: false,
+      code: 500,
+      message: "서버 오류가 발생했습니다."
+    });
+  }
+};
+
+// 비밀번호 재설정 (변경)
+exports.resetPassword = async (req, res) => {
+  try {
+    const { token, password } = req.body;
+    
+    if (!token || !password) {
+      return res.status(400).json({
+        isSuccess: false,
+        code: 400,
+        message: "토큰과 새 비밀번호를 모두 입력해주세요."
+      });
+    }
+    
+    // 비밀번호 유효성 검사
+    if (password.length < 8) {
+      return res.status(400).json({
+        isSuccess: false,
+        code: 400,
+        message: "비밀번호는 최소 8자 이상이어야 합니다."
+      });
+    }
+    
+    // 토큰으로 사용자 찾기
+    const user = await User.findOne({
+      resetPasswordToken: token,
+      resetPasswordExpires: { $gt: Date.now() }
+    });
+    
+    if (!user) {
+      return res.status(400).json({
+        isSuccess: false,
+        code: 400,
+        message: "유효하지 않거나 만료된 토큰입니다."
+      });
+    }
+    
+    // 새 비밀번호 설정
+    user.password = password;
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpires = undefined;
+    
+    await user.save();
+    
+    return res.status(200).json({
+      isSuccess: true,
+      code: 200,
+      message: "비밀번호가 성공적으로 변경되었습니다. 새 비밀번호로 로그인해주세요."
+    });
+  } catch (error) {
+    console.error('Password reset error:', error);
+    return res.status(500).json({
+      isSuccess: false,
+      code: 500,
+      message: "서버 오류가 발생했습니다."
+    });
+  }
+};
