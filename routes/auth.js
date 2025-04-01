@@ -99,4 +99,13 @@ router.post('/verify/:token', authController.verifyEmail);
 // 인증 이메일 재발송
 router.post('/resend-verification', authController.resendVerification);
 
+// 비밀번호 재설정 요청
+router.post('/password-change-request', authController.requestPasswordReset);
+
+// 비밀번호 재설정 토큰 확인
+router.get('/password-change-request/:token', authController.verifyResetToken);
+
+// 비밀번호 변경
+router.post('/reset-password', authController.resetPassword);
+
 module.exports = router;
