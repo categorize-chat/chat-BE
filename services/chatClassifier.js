@@ -1,6 +1,9 @@
 const mongoose = require('mongoose');
 const Chat = require('../schemas/chat');
 const axios = require('axios');
+require('dotenv').config();
+
+const MODEL_API_URL = process.env.MODEL_API_URL || 'http://localhost:5000';
 
 const classifyTopics = async (roomId, howmany = 100) => {
   console.log(`roomId: ${roomId} 채팅 ${howmany}개 분류 시작`);
@@ -25,7 +28,7 @@ const classifyTopics = async (roomId, howmany = 100) => {
     };
 
     // Python 모델 서버로 채팅 분류 요청
-    const response = await axios.post('http://localhost:5000/predict', modelInput);
+    const response = await axios.post(`${MODEL_API_URL}/predict`, modelInput);
     
     if (response.status === 500 || !response.data) {
       throw new Error('Invalid response from model server');

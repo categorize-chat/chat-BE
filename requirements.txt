@@ -1,0 +1,9 @@
+quart
+tensorflow
+torch
+transformers
+sentence-transformers
+scikit-learn
+numpy
+python-dotenv
+openai 
