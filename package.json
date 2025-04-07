@@ -5,13 +5,15 @@
   "main": "app.js",
   "scripts": {
     "start": "nodemon app",
-    "migrate": "node scripts/migrate.js"
+    "migrate": "node scripts/migrate.js",
+    "local-classifier": "node scripts/local_classifier.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.758.0",
     "@aws-sdk/s3-request-presigner": "^3.758.0",
     "axios": "^1.7.7",
     "bcrypt": "^5.1.1",
+    "body-parser": "^1.20.2",
     "cookie-parser": "^1.4.4",
     "cookie-session": "^2.1.0",
     "cors": "^2.8.5",
