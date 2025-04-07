@@ -9,7 +9,12 @@ RUN pip install --no-cache-dir --upgrade pip
 COPY requirements.txt .
 
 # 패키지 설치 및 캐시 정리
-RUN pip install --no-cache-dir -r requirements.txt && \
+RUN pip install --no-cache-dir torch==2.0.0+cpu --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir quart && \
+    pip install --no-cache-dir tokenizers && \
+    pip install --no-cache-dir scikit-learn python-dotenv openai numpy asyncio tqdm regex requests pyyaml && \
+    pip install --no-cache-dir --no-deps transformers && \
+    pip install --no-cache-dir --no-deps sentence-transformers && \
     find /usr/local/lib/python3.9/site-packages -name "*.pyc" -delete && \
     find /usr/local/lib/python3.9/site-packages -name "__pycache__" -exec rm -rf {} +
 

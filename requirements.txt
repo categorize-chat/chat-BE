@@ -1,8 +1,8 @@
 quart
 torch==2.0.0+cpu --index-url https://download.pytorch.org/whl/cpu
-transformers --no-deps
+transformers
 tokenizers
-sentence-transformers --no-deps
+sentence-transformers
 scikit-learn
 python-dotenv
 openai
