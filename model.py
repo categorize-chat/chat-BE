@@ -21,6 +21,10 @@ load_dotenv()
 
 app = Quart(__name__)
 
+# 모델 캐시 경로 설정 (외부 볼륨에 마운트 가능)
+os.environ['TRANSFORMERS_CACHE'] = '/app/model_cache'
+os.environ['HF_HOME'] = '/app/model_cache'
+
 # 전역 변수 설정
 PARAMETER_SETS = {
     'low': {
@@ -43,15 +47,31 @@ TIME_WINDOW_MINUTES = 4
 THREAD_TIMEOUT = timedelta(hours=12)
 MEANINGLESS_CHAT_PATTERN = re.compile(r'^([ㄱ-ㅎㅏ-ㅣ]+|[ㅋㅎㄷ]+|[ㅠㅜ]+|[.]+|[~]+|[!]+|[?]+)+$')
 
-# KLUE BERT 모델 및 토크나이저 초기화 (NSP용)
-klue_tokenizer = AutoTokenizer.from_pretrained("klue/bert-base")
-klue_model = AutoModelForNextSentencePrediction.from_pretrained("klue/bert-base")
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-klue_model.to(device)
-
-# KR-SBERT 모델 초기화 (임베딩용)
-sbert_model = SentenceTransformer('snunlp/KR-SBERT-V40K-klueNLI-augSTS')
-sbert_model.to(device)
+# 모델 로딩 함수 - 모델 없는 경우 주의 메시지 출력
+def load_models():
+    global klue_tokenizer, klue_model, sbert_model, device
+    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+    
+    # 모델 경로 확인 및 생성
+    os.makedirs('/app/model_cache', exist_ok=True)
+    
+    try:
+        # KLUE BERT 모델 및 토크나이저 초기화 (NSP용)
+        klue_tokenizer = AutoTokenizer.from_pretrained("klue/bert-base", local_files_only=False)
+        klue_model = AutoModelForNextSentencePrediction.from_pretrained("klue/bert-base", local_files_only=False)
+        klue_model.to(device)
+        
+        # KR-SBERT 모델 초기화 (임베딩용)
+        sbert_model = SentenceTransformer('snunlp/KR-SBERT-V40K-klueNLI-augSTS', cache_folder='/app/model_cache')
+        sbert_model.to(device)
+        
+        print("모델 로딩 완료")
+    except Exception as e:
+        print(f"모델 로딩 중 오류 발생: {e}")
+        print("오류 발생 시 필요한 모델 파일이 /app/model_cache 디렉토리에 존재하는지 확인하세요.")
+        raise
 
 # OpenAI 클라이언트 초기화 (요약용)
 openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -366,6 +386,9 @@ async def predict():
 if __name__ == '__main__':
     print("Starting model...")
     try:
+        # 모델 로딩
+        load_models()
+        
         port = int(os.environ.get('PORT', 5000))
         print(f"Server started on port {port}")
         app.run(host='0.0.0.0', port=port)

@@ -140,3 +140,57 @@ npm run dev
 ```
 
 개발 모드에서는 nodemon을 통해 파일 변경 시 자동으로 서버가 재시작됩니다.
+
+# 채팅 분류 서비스
+
+이 서비스는 채팅 메시지의 토픽을 분류하고 요약하는 API를 제공합니다.
+
+## 최적화된 Docker 빌드 및 실행 방법
+
+Docker 이미지 크기를 최적화하기 위해 아래 세 가지 방법을 사용할 수 있습니다.
+
+### 1. 기본 방법 (볼륨을 이용한 모델 캐싱)
+
+```bash
+# Docker Compose를 사용하여 빌드 및 실행
+docker-compose up -d
+```
+
+첫 실행 시 모델 파일이 다운로드되어 model_cache 볼륨에 저장됩니다. 이후에는 캐시된 모델을 사용합니다.
+
+### 2. 사전 다운로드된 모델 사용 (권장)
+
+모델을 미리 다운로드하여 이미지 빌드 시간과 크기를 줄입니다:
+
+```bash
+# 모델 다운로드 컨테이너 실행
+docker run --rm -v $(pwd)/model_cache:/app/model_cache $(docker build -q -f Dockerfile.download .)
+
+# 본 서비스 빌드 및 실행
+docker-compose up -d
+```
+
+### 3. 경량화된 이미지 빌드 (가장 작은 이미지 크기)
+
+경량화된 이미지를 빌드하려면 다음 명령어를 사용합니다:
+
+```bash
+# 이미지 빌드 (멀티스테이지 빌드)
+docker build -t chat-classifier:optimized .
+
+# 모델 캐시 볼륨과 함께 실행
+docker run -d -p 5000:5000 -v $(pwd)/model_cache:/app/model_cache chat-classifier:optimized
+```
+
+## 모델 캐시
+
+모델 파일은 다음 경로에 저장됩니다:
+- `model_cache/`: 모델 파일이 저장되는 볼륨 디렉토리
+
+## Docker 이미지 최적화 팁
+
+1. 다단계 빌드 사용
+2. 모델 파일을 볼륨으로 분리
+3. `.dockerignore` 파일을 활용하여 불필요한 파일 제외
+4. 경량화된 베이스 이미지 사용
+5. 캐시 및 임시 파일 제거

@@ -1,10 +1,15 @@
 quart
-tensorflow
-torch
-transformers
-sentence-transformers
+torch==2.0.0+cpu --index-url https://download.pytorch.org/whl/cpu
+transformers --no-deps
+tokenizers
+sentence-transformers --no-deps
 scikit-learn
 python-dotenv
 openai
 numpy
-asyncio 
+asyncio
+# 필요한 패키지만 명시적으로 설치
+tqdm
+regex
+requests
+pyyaml

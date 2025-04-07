@@ -1,0 +1,14 @@
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# 필요한 라이브러리만 설치
+COPY requirements.txt .
+RUN pip install --no-cache-dir torch==2.0.0+cpu --index-url https://download.pytorch.org/whl/cpu \
+    transformers sentence-transformers
+
+# 모델 다운로드 스크립트 복사
+COPY download_models.py .
+
+# 모델 다운로드 실행
+CMD ["python", "download_models.py"] 

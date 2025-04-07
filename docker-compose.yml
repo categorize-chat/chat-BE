@@ -9,6 +9,11 @@ services:
       - "5000:5000"
     volumes:
       - ./.env:/app/.env
+      - model_cache:/app/model_cache
     environment:
       - PYTHONUNBUFFERED=1
-    restart: unless-stopped 
+    restart: unless-stopped
+    
+volumes:
+  model_cache:
+    driver: local 

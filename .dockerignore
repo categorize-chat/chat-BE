@@ -1,0 +1,60 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 환경 설정
+.env.local
+.env.development
+.env.test
+
+# 로그
+*.log
+logs/
+
+# 개발 및 테스트 디렉토리
+tests/
+test/
+docs/
+examples/
+
+# 캐시
+.cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 에디터 설정
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 대용량 모델 파일
+*.bin
+*.pt
+*.pth
+*.h5
+*.model
+*.onnx 
