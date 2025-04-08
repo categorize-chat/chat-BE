@@ -18,14 +18,14 @@ const classifyTopics = async (roomId, howmany = 100) => {
       howmany: howmany,
       chats: chats.map(chat => ({
         id: chat._id.toString(),
-        nickname: chat.nickname,
+        user: chat.user.toString(),
         content: chat.content,
         createdAt: chat.createdAt.toISOString()
       }))
     };
 
     // Python 모델 서버로 채팅 분류 요청
-    const response = await axios.post('http://localhost:5000/predict', modelInput);
+    const response = await axios.post((process.env.AI_SERVER_URL || 'http://localhost:5000') + '/predict', modelInput);
     
     if (response.status === 500 || !response.data) {
       throw new Error('Invalid response from model server');
