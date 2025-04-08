@@ -12,6 +12,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir torch==2.0.0+cpu --index-url https://download.pytorch.org/whl/cpu && \
     pip install --no-cache-dir quart && \
     pip install --no-cache-dir tokenizers && \
+    pip install --no-cache-dir tensorflow && \
     pip install --no-cache-dir scikit-learn python-dotenv openai numpy asyncio tqdm regex requests pyyaml && \
     pip install --no-cache-dir --no-deps transformers && \
     pip install --no-cache-dir --no-deps sentence-transformers && \

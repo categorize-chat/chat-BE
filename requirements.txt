@@ -8,6 +8,7 @@ python-dotenv
 openai
 numpy
 asyncio
+tensorflow
 # 필요한 패키지만 명시적으로 설치
 tqdm
 regex
