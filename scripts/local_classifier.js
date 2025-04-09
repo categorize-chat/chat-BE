@@ -230,43 +230,54 @@ async function main() {
       
       AUTH_TOKEN = await login(email, password);
       if (!AUTH_TOKEN) {
+        console.error('로그인에 실패했습니다. 서비스를 시작할 수 없습니다.');
         return null;
       }
     }
 
+    console.log('인증 성공: 토큰이 설정되었습니다.');
+
     // 모델 서버 연결 확인
+    let modelServerAvailable = false;
     try {
-      await checkModelServer();
-      console.log('모델 서버 연결 확인을 완료했습니다.');
+      modelServerAvailable = await checkModelServer();
     } catch (error) {
-      console.warn('모델 서버 연결 확인 중 예상치 못한 오류가 발생했습니다:', error.message);
-      console.warn('계속 진행합니다만, 분류 기능은 작동하지 않을 수 있습니다.');
+      console.error('모델 서버 연결 확인 중 오류가 발생했습니다:', error.message);
+      console.warn('모델 서버가 없어도 로컬 API 서버는 시작됩니다.');
+      // 모델 서버가 없어도 계속 진행
     }
 
     // API 서버 시작
-    return await new Promise((resolve) => {
-      try {
-        const server = app.listen(API_PORT, () => {
+    console.log('로컬 API 서버를 시작합니다...');
+    let server = null;
+    
+    try {
+      server = await new Promise((resolve, reject) => {
+        const svr = app.listen(API_PORT, () => {
           console.log(`로컬 API 서버가 http://localhost:${API_PORT}에서 실행 중입니다.`);
           console.log(`주제 요약 API 엔드포인트: http://localhost:${API_PORT}/chat/summary`);
           console.log(`프론트엔드에서 ${SERVER_URL} 대신 http://localhost:${API_PORT}으로 요청을 보내도록 설정하세요.`);
-          console.log('프로그램이 실행 중입니다. 종료하려면 Ctrl+C를 누르세요.');
-          
-          // 서버 객체 반환
-          resolve(server);
+          resolve(svr);
         });
         
-        server.on('error', (err) => {
+        svr.on('error', (err) => {
           console.error('서버 시작 오류:', err.message);
-          resolve(null);
+          // 서버 시작 오류 (예: 포트가 이미 사용 중)
+          reject(new Error(`서버 시작 오류: ${err.message}`));
         });
-      } catch (error) {
-        console.error('서버 시작 중 예상치 못한 오류:', error.message);
-        resolve(null);
-      }
-    });
+      });
+      
+      console.log('API 서버가 성공적으로 시작되었습니다.');
+      return server;
+    } catch (error) {
+      console.error('API 서버 시작 중 오류:', error.message);
+      console.error('다른 프로세스가 이미 포트 3000을 사용 중일 수 있습니다.');
+      console.error('다른 포트를 사용하려면 .env 파일에서 API_PORT 값을 변경하세요.');
+      return null;
+    }
   } catch (error) {
-    console.error('메인 함수 실행 중 오류:', error);
+    console.error('메인 함수 실행 중 오류:', error.message);
+    console.error('스택 트레이스:', error.stack);
     return null;
   }
 }
@@ -281,10 +292,16 @@ console.log('로컬 분류기 스크립트를 초기화합니다...');
     
     if (!server) {
       console.error('서버 시작에 실패했습니다.');
+      console.error('위의 오류 메시지를 확인하여 문제를 해결하세요.');
+      console.error('프로그램이 10초 후에 종료됩니다...');
+      
+      // 오류 메시지를 확인할 수 있도록 10초 대기 후 종료
+      await new Promise(resolve => setTimeout(resolve, 10000));
       process.exit(1);
     }
     
     console.log('서버가 성공적으로 시작되었습니다.');
+    console.log('프로그램이 실행 중입니다. 종료하려면 Ctrl+C를 누르세요.');
     
     // 프로세스 종료 이벤트 처리
     process.on('SIGINT', () => {
@@ -295,18 +312,20 @@ console.log('로컬 분류기 스크립트를 초기화합니다...');
       });
     });
     
-    // Windows에서 스크립트가 종료되지 않도록 하는 확실한 방법
-    // 파일에 명시적으로 성공 메시지를 기록
-    const fs = require('fs');
-    fs.writeFileSync('local_classifier_running.log', `서버가 ${new Date().toISOString()}에 시작되었습니다.\n`);
+    // Windows에서 스크립트가 종료되지 않도록 하는 코드
+    process.stdin.resume(); // stdin을 열어 프로세스가 종료되지 않도록 함
     
     // 명시적인 무한 대기 코드
     await new Promise(() => {
       // 이 Promise는 의도적으로 resolve를 호출하지 않음 (무한 대기)
-      console.log('서버가 실행 중입니다. 종료하려면 Ctrl+C를 누르세요.');
     });
   } catch (error) {
-    console.error('프로그램 실행 중 예상치 못한 오류:', error);
+    console.error('프로그램 실행 중 치명적 오류:', error.message);
+    console.error('스택 트레이스:', error.stack);
+    console.error('프로그램이 10초 후에 종료됩니다...');
+    
+    // 오류 메시지를 확인할 수 있도록 10초 대기 후 종료
+    await new Promise(resolve => setTimeout(resolve, 10000));
     process.exit(1);
   }
 })(); 
