@@ -131,11 +131,14 @@ async function checkModelServer() {
     console.log(`모델 서버(포트 ${MODEL_PORT})에 연결되었습니다.`);
     return true;
   } catch (error) {
-    console.error(`모델 서버(포트 ${MODEL_PORT})에 연결할 수 없습니다.`);
+    console.error(`모델 서버(포트 ${MODEL_PORT})에 연결할 수 없습니다. 오류: ${error.message}`);
     console.error('모델 서버가 실행 중인지 확인하세요.');
     console.error('Docker 컨테이너가 실행 중인지 확인하세요:');
     console.error('  1. docker ps 명령어로 실행 중인 컨테이너 확인');
     console.error('  2. docker-compose up -d 명령어로 Docker 컨테이너 시작');
+    
+    // 모델 서버가 없어도 계속 진행하지만 사용자에게 알림
+    console.log('모델 서버가 없어도 로컬 API 서버는 시작됩니다. 하지만 분류 기능은 동작하지 않을 수 있습니다.');
     return false;
   }
 }
@@ -233,26 +236,41 @@ async function main() {
   // 모델 서버 연결 확인
   try {
     await checkModelServer();
+    console.log('모델 서버 연결 확인을 완료했습니다.');
   } catch (error) {
-    console.warn('모델 서버 연결 확인 중 오류가 발생했습니다. 계속 진행합니다.');
+    console.warn('모델 서버 연결 확인 중 예상치 못한 오류가 발생했습니다:', error.message);
+    console.warn('계속 진행합니다만, 분류 기능은 작동하지 않을 수 있습니다.');
   }
 
   // API 서버 시작
   return new Promise((resolve) => {
-    const server = app.listen(API_PORT, () => {
-      console.log(`로컬 API 서버가 http://localhost:${API_PORT}에서 실행 중입니다.`);
-      console.log(`주제 요약 API 엔드포인트: http://localhost:${API_PORT}/chat/summary`);
-      console.log(`프론트엔드에서 ${SERVER_URL} 대신 http://localhost:${API_PORT}으로 요청을 보내도록 설정하세요.`);
-      console.log('프로그램이 실행 중입니다. 종료하려면 Ctrl+C를 누르세요.');
+    try {
+      const server = app.listen(API_PORT, () => {
+        console.log(`로컬 API 서버가 http://localhost:${API_PORT}에서 실행 중입니다.`);
+        console.log(`주제 요약 API 엔드포인트: http://localhost:${API_PORT}/chat/summary`);
+        console.log(`프론트엔드에서 ${SERVER_URL} 대신 http://localhost:${API_PORT}으로 요청을 보내도록 설정하세요.`);
+        console.log('프로그램이 실행 중입니다. 종료하려면 Ctrl+C를 누르세요.');
+        
+        // 서버 객체 반환
+        resolve(server);
+      });
       
-      // 서버 객체 반환
-      resolve(server);
-    });
+      server.on('error', (err) => {
+        console.error('서버 시작 오류:', err.message);
+        process.exit(1);
+      });
+    } catch (error) {
+      console.error('서버 시작 중 예상치 못한 오류:', error.message);
+      process.exit(1);
+    }
   });
 }
 
 // 프로그램 시작 메시지
 console.log('로컬 분류기 스크립트를 초기화합니다...');
+
+// Windows 환경용 스크립트 종료 방지 플래그
+let keepAlive = true;
 
 // 프로그램 실행
 main()
@@ -263,17 +281,28 @@ main()
     // SIGINT 처리 (Ctrl+C)
     process.on('SIGINT', () => {
       console.log('\n프로그램을 종료합니다.');
+      keepAlive = false;
       server.close(() => {
         console.log('서버가 정상적으로 종료되었습니다.');
         process.exit(0);
       });
     });
     
-    // 이벤트 루프를 강제로 활성 상태로 유지
-    setInterval(() => {}, 1000 * 60 * 60); // 빈 함수를 1시간마다 실행
+    // Windows에서도 작동하는 이벤트 루프 유지 방식
+    // 1. setInterval 사용
+    const interval = setInterval(() => {
+      if (!keepAlive) {
+        clearInterval(interval);
+      }
+    }, 1000);
     
-    // stdin을 열어 프로세스가 종료되지 않도록 함
+    // 2. stdin 사용
     process.stdin.resume();
+    
+    // 3. Promise 사용
+    return new Promise(resolve => {
+      if (!keepAlive) resolve();
+    });
   })
   .catch(error => {
     console.error('프로그램 실행 오류:', error);
