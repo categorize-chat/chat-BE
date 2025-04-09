@@ -82,7 +82,9 @@ async function classifyChats(roomId, chats) {
       }))
     };
 
+    console.log(`모델 서버에 분류 요청을 보냅니다: http://localhost:${MODEL_PORT}/predict`);
     const response = await axios.post(`http://localhost:${MODEL_PORT}/predict`, modelInput);
+    console.log('모델 서버로부터 응답을 받았습니다.');
     return response.data;
   } catch (error) {
     console.error('채팅 분류 요청 오류:', error.message);
@@ -124,14 +126,16 @@ async function sendClassificationResults(roomId, results) {
 // 모델 서버 연결 확인 함수
 async function checkModelServer() {
   try {
+    console.log(`모델 서버 연결을 확인합니다: http://localhost:${MODEL_PORT}/health`);
     await axios.get(`http://localhost:${MODEL_PORT}/health`);
     console.log(`모델 서버(포트 ${MODEL_PORT})에 연결되었습니다.`);
     return true;
   } catch (error) {
     console.error(`모델 서버(포트 ${MODEL_PORT})에 연결할 수 없습니다.`);
-    console.error('모델 서버가 실행 중인지 확인하세요. Docker 컨테이너가 실행 중인지 확인하세요.');
-    console.error('또는 다음 명령어를 실행하여 Docker 컨테이너를 시작하세요:');
-    console.error('docker-compose up -d');
+    console.error('모델 서버가 실행 중인지 확인하세요.');
+    console.error('Docker 컨테이너가 실행 중인지 확인하세요:');
+    console.error('  1. docker ps 명령어로 실행 중인 컨테이너 확인');
+    console.error('  2. docker-compose up -d 명령어로 Docker 컨테이너 시작');
     return false;
   }
 }
@@ -198,8 +202,18 @@ app.post('/chat/summary', async (req, res) => {
   }
 });
 
+// 서버 상태 확인 엔드포인트
+app.get('/health', (req, res) => {
+  return res.json({
+    status: 'ok',
+    message: '로컬 분류기 서버가 정상적으로 실행 중입니다.'
+  });
+});
+
 // 메인 함수
 async function main() {
+  console.log('로컬 분류기 서비스를 시작합니다...');
+  
   // 로그인 정보가 없다면 입력 받음
   if (!AUTH_TOKEN) {
     const email = process.env.EMAIL;
@@ -224,45 +238,44 @@ async function main() {
   }
 
   // API 서버 시작
-  const server = app.listen(API_PORT, () => {
-    console.log(`로컬 API 서버가 http://localhost:${API_PORT}에서 실행 중입니다.`);
-    console.log(`주제 요약 API 엔드포인트: http://localhost:${API_PORT}/chat/summary`);
-    console.log(`프론트엔드에서 ${SERVER_URL} 대신 http://localhost:${API_PORT}으로 요청을 보내도록 설정하세요.`);
-    console.log('프로그램이 실행 중입니다. 종료하려면 Ctrl+C를 누르세요.');
-  });
-  
-  // 서버 오류 처리
-  server.on('error', (err) => {
-    console.error('서버 오류:', err);
-    process.exit(1);
-  });
-  
-  // 프로세스 종료 시그널 처리
-  process.on('SIGINT', () => {
-    console.log('\n프로그램을 종료합니다.');
-    server.close(() => {
-      process.exit(0);
+  return new Promise((resolve) => {
+    const server = app.listen(API_PORT, () => {
+      console.log(`로컬 API 서버가 http://localhost:${API_PORT}에서 실행 중입니다.`);
+      console.log(`주제 요약 API 엔드포인트: http://localhost:${API_PORT}/chat/summary`);
+      console.log(`프론트엔드에서 ${SERVER_URL} 대신 http://localhost:${API_PORT}으로 요청을 보내도록 설정하세요.`);
+      console.log('프로그램이 실행 중입니다. 종료하려면 Ctrl+C를 누르세요.');
+      
+      // 서버 객체 반환
+      resolve(server);
     });
   });
-  
-  // 프로그램이 종료되지 않도록 하기 위한 코드
-  return server;
 }
 
+// 프로그램 시작 메시지
+console.log('로컬 분류기 스크립트를 초기화합니다...');
+
 // 프로그램 실행
-main().then((server) => {
-  // Node.js가 종료되지 않도록 이벤트 루프를 활성 상태로 유지
-  process.stdin.resume();
-  
-  // 추가적인 안전장치: 서버가 실행 중인지 주기적으로 확인
-  setInterval(() => {
-    if (server && server.listening) {
-      // 서버가 정상적으로 실행 중
-    } else {
-      console.error('서버가 비정상적으로 종료되었습니다.');
-      process.exit(1);
-    }
-  }, 60000); // 1분마다 확인
-}).catch(error => {
-  console.error('프로그램 실행 오류:', error);
-}); 
+main()
+  .then(server => {
+    // Node.js가 종료되지 않도록 이벤트 루프를 활성 상태로 유지
+    console.log('서버가 성공적으로 시작되었습니다. 이벤트 루프를 유지합니다.');
+    
+    // SIGINT 처리 (Ctrl+C)
+    process.on('SIGINT', () => {
+      console.log('\n프로그램을 종료합니다.');
+      server.close(() => {
+        console.log('서버가 정상적으로 종료되었습니다.');
+        process.exit(0);
+      });
+    });
+    
+    // 이벤트 루프를 강제로 활성 상태로 유지
+    setInterval(() => {}, 1000 * 60 * 60); // 빈 함수를 1시간마다 실행
+    
+    // stdin을 열어 프로세스가 종료되지 않도록 함
+    process.stdin.resume();
+  })
+  .catch(error => {
+    console.error('프로그램 실행 오류:', error);
+    process.exit(1);
+  }); 
