@@ -206,20 +206,20 @@ async function main() {
     console.log(`로컬 API 서버가 http://localhost:${API_PORT}에서 실행 중입니다.`);
     console.log(`주제 요약 API 엔드포인트: http://localhost:${API_PORT}/chat/summary`);
     console.log(`프론트엔드에서 ${SERVER_URL} 대신 http://localhost:${API_PORT}으로 요청을 보내도록 설정하세요.`);
+    console.log('프로그램이 실행 중입니다. 종료하려면 Ctrl+C를 누르세요.');
   });
+
+  // 종료 시그널 처리
+  process.on('SIGINT', () => {
+    console.log('\n프로그램을 종료합니다.');
+    process.exit(0);
+  });
+  
+  // 프로그램이 종료되지 않도록 이벤트 루프 유지
+  process.stdin.resume();
 }
 
 // 프로그램 실행
 main().catch(error => {
   console.error('프로그램 실행 오류:', error);
-});
-
-// 프로그램이 종료되지 않도록 이벤트 리스너 추가
-console.log('프로그램이 실행 중입니다. 종료하려면 Ctrl+C를 누르세요.');
-process.stdin.resume();
-
-// 종료 시그널 처리
-process.on('SIGINT', () => {
-  console.log('\n프로그램을 종료합니다.');
-  process.exit(0);
 }); 
