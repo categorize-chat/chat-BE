@@ -13,9 +13,11 @@ RUN pip install --no-cache-dir torch==2.0.0+cpu --index-url https://download.pyt
     pip install --no-cache-dir quart && \
     pip install --no-cache-dir tokenizers && \
     pip install --no-cache-dir tensorflow && \
-    pip install --no-cache-dir scikit-learn python-dotenv openai numpy asyncio tqdm regex requests pyyaml && \
-    pip install --no-cache-dir --no-deps transformers && \
-    pip install --no-cache-dir --no-deps sentence-transformers && \
+    pip install --no-cache-dir numpy==1.23.5 && \
+    pip install --no-cache-dir scikit-learn python-dotenv openai asyncio tqdm regex requests pyyaml && \
+    pip install --no-cache-dir safetensors>=0.4.3 && \
+    pip install --no-cache-dir transformers && \
+    pip install --no-cache-dir sentence-transformers && \
     find /usr/local/lib/python3.9/site-packages -name "*.pyc" -delete && \
     find /usr/local/lib/python3.9/site-packages -name "__pycache__" -exec rm -rf {} +
 

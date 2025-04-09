@@ -152,9 +152,40 @@ async function classifyChats(roomId, chats) {
     };
 
     console.log(`모델 서버에 분류 요청을 보냅니다: http://localhost:${MODEL_PORT}/predict`);
-    const response = await axios.post(`http://localhost:${MODEL_PORT}/predict`, modelInput);
-    console.log('모델 서버로부터 응답을 받았습니다.');
-    return response.data;
+    
+    // 여러 가능한 모델 서버 URL 시도
+    let error;
+    
+    // 방법 1: 로컬호스트 시도
+    try {
+      const response = await axios.post(`http://localhost:${MODEL_PORT}/predict`, modelInput);
+      console.log('모델 서버로부터 응답을 받았습니다.');
+      return response.data;
+    } catch (err) {
+      console.log(`로컬호스트 연결 실패: ${err.message}`);
+      error = err;
+    }
+    
+    // 방법 2: 컨테이너 이름 시도
+    try {
+      const response = await axios.post(`http://chat-classifier:${MODEL_PORT}/predict`, modelInput);
+      console.log('컨테이너 이름으로 모델 서버로부터 응답을 받았습니다.');
+      return response.data;
+    } catch (err) {
+      console.log(`컨테이너 이름 연결 실패: ${err.message}`);
+    }
+    
+    // 방법 3: Docker 호스트 IP 시도
+    try {
+      const response = await axios.post(`http://host.docker.internal:${MODEL_PORT}/predict`, modelInput);
+      console.log('Docker 호스트 IP로 모델 서버로부터 응답을 받았습니다.');
+      return response.data;
+    } catch (err) {
+      console.log(`Docker 호스트 IP 연결 실패: ${err.message}`);
+    }
+    
+    // 모든 방법 실패
+    throw error || new Error('모든 연결 방법이 실패했습니다.');
   } catch (error) {
     console.error('채팅 분류 요청 오류:', error.message);
     return null;
@@ -196,9 +227,40 @@ async function sendClassificationResults(roomId, results) {
 async function checkModelServer() {
   try {
     console.log(`모델 서버 연결을 확인합니다: http://localhost:${MODEL_PORT}/health`);
-    await axios.get(`http://localhost:${MODEL_PORT}/health`);
-    console.log(`모델 서버(포트 ${MODEL_PORT})에 연결되었습니다.`);
-    return true;
+    
+    // 여러 가능한 모델 서버 URL 시도
+    let error;
+    
+    // 방법 1: 로컬호스트 시도
+    try {
+      await axios.get(`http://localhost:${MODEL_PORT}/health`);
+      console.log(`모델 서버(포트 ${MODEL_PORT})에 연결되었습니다.`);
+      return true;
+    } catch (err) {
+      console.log(`로컬호스트 연결 실패: ${err.message}`);
+      error = err;
+    }
+    
+    // 방법 2: 컨테이너 이름 시도
+    try {
+      await axios.get(`http://chat-classifier:${MODEL_PORT}/health`);
+      console.log(`컨테이너 이름으로 모델 서버(포트 ${MODEL_PORT})에 연결되었습니다.`);
+      return true;
+    } catch (err) {
+      console.log(`컨테이너 이름 연결 실패: ${err.message}`);
+    }
+    
+    // 방법 3: Docker 호스트 IP 시도
+    try {
+      await axios.get(`http://host.docker.internal:${MODEL_PORT}/health`);
+      console.log(`Docker 호스트 IP로 모델 서버(포트 ${MODEL_PORT})에 연결되었습니다.`);
+      return true;
+    } catch (err) {
+      console.log(`Docker 호스트 IP 연결 실패: ${err.message}`);
+    }
+    
+    // 모든 방법 실패
+    throw error || new Error('모든 연결 방법이 실패했습니다.');
   } catch (error) {
     console.error(`모델 서버(포트 ${MODEL_PORT})에 연결할 수 없습니다. 오류: ${error.message}`);
     console.error('모델 서버가 실행 중인지 확인하세요.');
