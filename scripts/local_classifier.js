@@ -121,6 +121,21 @@ async function sendClassificationResults(roomId, results) {
   }
 }
 
+// 모델 서버 연결 확인 함수
+async function checkModelServer() {
+  try {
+    await axios.get(`http://localhost:${MODEL_PORT}/health`);
+    console.log(`모델 서버(포트 ${MODEL_PORT})에 연결되었습니다.`);
+    return true;
+  } catch (error) {
+    console.error(`모델 서버(포트 ${MODEL_PORT})에 연결할 수 없습니다.`);
+    console.error('모델 서버가 실행 중인지 확인하세요. Docker 컨테이너가 실행 중인지 확인하세요.');
+    console.error('또는 다음 명령어를 실행하여 Docker 컨테이너를 시작하세요:');
+    console.error('docker-compose up -d');
+    return false;
+  }
+}
+
 // 주제 요약 요청 처리 API 엔드포인트
 app.post('/chat/summary', async (req, res) => {
   try {
@@ -201,35 +216,53 @@ async function main() {
     }
   }
 
-  // API 서버 시작 - Promise로 래핑하여 서버 시작을 기다림
-  return new Promise((resolve) => {
-    const server = app.listen(API_PORT, () => {
-      console.log(`로컬 API 서버가 http://localhost:${API_PORT}에서 실행 중입니다.`);
-      console.log(`주제 요약 API 엔드포인트: http://localhost:${API_PORT}/chat/summary`);
-      console.log(`프론트엔드에서 ${SERVER_URL} 대신 http://localhost:${API_PORT}으로 요청을 보내도록 설정하세요.`);
-      console.log('프로그램이 실행 중입니다. 종료하려면 Ctrl+C를 누르세요.');
-    });
-    
-    // 서버 오류 처리
-    server.on('error', (err) => {
-      console.error('서버 오류:', err);
-      process.exit(1);
-    });
-    
-    // 프로세스 종료 시그널 처리
-    process.on('SIGINT', () => {
-      console.log('\n프로그램을 종료합니다.');
-      server.close(() => {
-        process.exit(0);
-      });
+  // 모델 서버 연결 확인
+  try {
+    await checkModelServer();
+  } catch (error) {
+    console.warn('모델 서버 연결 확인 중 오류가 발생했습니다. 계속 진행합니다.');
+  }
+
+  // API 서버 시작
+  const server = app.listen(API_PORT, () => {
+    console.log(`로컬 API 서버가 http://localhost:${API_PORT}에서 실행 중입니다.`);
+    console.log(`주제 요약 API 엔드포인트: http://localhost:${API_PORT}/chat/summary`);
+    console.log(`프론트엔드에서 ${SERVER_URL} 대신 http://localhost:${API_PORT}으로 요청을 보내도록 설정하세요.`);
+    console.log('프로그램이 실행 중입니다. 종료하려면 Ctrl+C를 누르세요.');
+  });
+  
+  // 서버 오류 처리
+  server.on('error', (err) => {
+    console.error('서버 오류:', err);
+    process.exit(1);
+  });
+  
+  // 프로세스 종료 시그널 처리
+  process.on('SIGINT', () => {
+    console.log('\n프로그램을 종료합니다.');
+    server.close(() => {
+      process.exit(0);
     });
   });
+  
+  // 프로그램이 종료되지 않도록 하기 위한 코드
+  return server;
 }
 
 // 프로그램 실행
-main().then(() => {
-  // 이벤트 루프를 활성 상태로 유지
-  setInterval(() => {}, 1000 * 60 * 60); // 1시간마다 더미 함수 실행
+main().then((server) => {
+  // Node.js가 종료되지 않도록 이벤트 루프를 활성 상태로 유지
+  process.stdin.resume();
+  
+  // 추가적인 안전장치: 서버가 실행 중인지 주기적으로 확인
+  setInterval(() => {
+    if (server && server.listening) {
+      // 서버가 정상적으로 실행 중
+    } else {
+      console.error('서버가 비정상적으로 종료되었습니다.');
+      process.exit(1);
+    }
+  }, 60000); // 1분마다 확인
 }).catch(error => {
   console.error('프로그램 실행 오류:', error);
 }); 
