@@ -212,4 +212,14 @@ async function main() {
 // 프로그램 실행
 main().catch(error => {
   console.error('프로그램 실행 오류:', error);
+});
+
+// 프로그램이 종료되지 않도록 이벤트 리스너 추가
+console.log('프로그램이 실행 중입니다. 종료하려면 Ctrl+C를 누르세요.');
+process.stdin.resume();
+
+// 종료 시그널 처리
+process.on('SIGINT', () => {
+  console.log('\n프로그램을 종료합니다.');
+  process.exit(0);
 }); 

@@ -10,6 +10,8 @@ services:
     volumes:
       - ./.env:/app/.env
       - model_cache:/app/model_cache
+      - /dev/urandom:/dev/urandom
+      - /dev/random:/dev/random
     environment:
       - PYTHONUNBUFFERED=1
     restart: unless-stopped

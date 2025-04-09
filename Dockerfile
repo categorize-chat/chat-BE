@@ -24,6 +24,10 @@ FROM python:3.9-slim
 
 WORKDIR /app
 
+# 난수 생성 관련 환경 변수 설정
+ENV PYTHONHASHSEED=0
+ENV CUBLAS_WORKSPACE_CONFIG=:4096:8
+
 # 빌더 스테이지에서 설치된 패키지 복사
 COPY --from=builder /usr/local/lib/python3.9/site-packages /usr/local/lib/python3.9/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
