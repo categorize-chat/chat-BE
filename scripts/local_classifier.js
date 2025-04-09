@@ -23,19 +23,72 @@ app.use(bodyParser.json());
 // 로그인 함수
 async function login(email, password) {
   try {
+    console.log(`로그인 시도 중: ${SERVER_URL}/user/login`);
+    console.log(`이메일: ${email}`);
+    console.log(`비밀번호: ${'*'.repeat(password.length)}`);
+    
     const response = await axios.post(`${SERVER_URL}/user/login`, {
       email,
       password
     });
     
-    if (response.data.isSuccess) {
-      return response.data.result.token;
+    console.log('서버 응답 상태:', response.status);
+    console.log('서버 응답 데이터 구조:', Object.keys(response.data));
+    console.log('서버 응답 데이터:', JSON.stringify(response.data, null, 2));
+    
+    // 여러 가능한 응답 구조 처리
+    if (response.status === 200) {
+      // 케이스 1: isSuccess 필드 확인
+      if (response.data.isSuccess === true && response.data.result && response.data.result.token) {
+        console.log('케이스 1: isSuccess 필드 확인 - 성공');
+        return response.data.result.token;
+      }
+      
+      // 케이스 2: success 필드 확인
+      if (response.data.success === true && response.data.token) {
+        console.log('케이스 2: success 필드 확인 - 성공');
+        return response.data.token;
+      }
+      
+      // 케이스 3: token 필드 직접 확인
+      if (response.data.token) {
+        console.log('케이스 3: token 필드 직접 확인 - 성공');
+        return response.data.token;
+      }
+      
+      // 케이스 4: data 내부에 token 필드 확인
+      if (response.data.data && response.data.data.token) {
+        console.log('케이스 4: data 내부에 token 필드 확인 - 성공');
+        return response.data.data.token;
+      }
+      
+      // 케이스 5: JWT 형식 문자열인 경우
+      if (typeof response.data === 'string' && response.data.startsWith('ey')) {
+        console.log('케이스 5: JWT 형식 문자열 확인 - 성공');
+        return response.data;
+      }
+      
+      // 응답 구조가 예상과 다름
+      console.error('로그인은 성공했지만 토큰을 찾을 수 없습니다.');
+      console.error('응답 구조:', JSON.stringify(response.data, null, 2));
+      console.error('서버 응답에 맞게 코드를 수정해주세요.');
+      return null;
     } else {
-      console.error('로그인 실패:', response.data.message);
+      console.error('로그인 실패:', response.statusText);
       return null;
     }
   } catch (error) {
     console.error('로그인 오류:', error.message);
+    if (error.response) {
+      console.error('서버 응답 데이터:', JSON.stringify(error.response.data, null, 2));
+      console.error('서버 응답 상태:', error.response.status);
+      console.error('서버 응답 헤더:', JSON.stringify(error.response.headers, null, 2));
+    } else if (error.request) {
+      console.error('요청은 보냈지만 응답을 받지 못했습니다. 서버가 실행 중인지 확인하세요.');
+      console.error('서버 URL:', SERVER_URL);
+    } else {
+      console.error('요청 설정 중 오류가 발생했습니다:', error.message);
+    }
     return null;
   }
 }
