@@ -215,96 +215,98 @@ app.get('/health', (req, res) => {
 
 // 메인 함수
 async function main() {
-  console.log('로컬 분류기 서비스를 시작합니다...');
-  
-  // 로그인 정보가 없다면 입력 받음
-  if (!AUTH_TOKEN) {
-    const email = process.env.EMAIL;
-    const password = process.env.PASSWORD;
-    
-    if (!email || !password) {
-      console.error('이메일과 비밀번호를 .env 파일에 설정해주세요.');
-      process.exit(1);
-    }
-    
-    AUTH_TOKEN = await login(email, password);
-    if (!AUTH_TOKEN) {
-      process.exit(1);
-    }
-  }
-
-  // 모델 서버 연결 확인
   try {
-    await checkModelServer();
-    console.log('모델 서버 연결 확인을 완료했습니다.');
-  } catch (error) {
-    console.warn('모델 서버 연결 확인 중 예상치 못한 오류가 발생했습니다:', error.message);
-    console.warn('계속 진행합니다만, 분류 기능은 작동하지 않을 수 있습니다.');
-  }
-
-  // API 서버 시작
-  return new Promise((resolve) => {
-    try {
-      const server = app.listen(API_PORT, () => {
-        console.log(`로컬 API 서버가 http://localhost:${API_PORT}에서 실행 중입니다.`);
-        console.log(`주제 요약 API 엔드포인트: http://localhost:${API_PORT}/chat/summary`);
-        console.log(`프론트엔드에서 ${SERVER_URL} 대신 http://localhost:${API_PORT}으로 요청을 보내도록 설정하세요.`);
-        console.log('프로그램이 실행 중입니다. 종료하려면 Ctrl+C를 누르세요.');
-        
-        // 서버 객체 반환
-        resolve(server);
-      });
+    console.log('로컬 분류기 서비스를 시작합니다...');
+    
+    // 로그인 정보가 없다면 입력 받음
+    if (!AUTH_TOKEN) {
+      const email = process.env.EMAIL;
+      const password = process.env.PASSWORD;
       
-      server.on('error', (err) => {
-        console.error('서버 시작 오류:', err.message);
-        process.exit(1);
-      });
-    } catch (error) {
-      console.error('서버 시작 중 예상치 못한 오류:', error.message);
-      process.exit(1);
+      if (!email || !password) {
+        console.error('이메일과 비밀번호를 .env 파일에 설정해주세요.');
+        return null;
+      }
+      
+      AUTH_TOKEN = await login(email, password);
+      if (!AUTH_TOKEN) {
+        return null;
+      }
     }
-  });
+
+    // 모델 서버 연결 확인
+    try {
+      await checkModelServer();
+      console.log('모델 서버 연결 확인을 완료했습니다.');
+    } catch (error) {
+      console.warn('모델 서버 연결 확인 중 예상치 못한 오류가 발생했습니다:', error.message);
+      console.warn('계속 진행합니다만, 분류 기능은 작동하지 않을 수 있습니다.');
+    }
+
+    // API 서버 시작
+    return await new Promise((resolve) => {
+      try {
+        const server = app.listen(API_PORT, () => {
+          console.log(`로컬 API 서버가 http://localhost:${API_PORT}에서 실행 중입니다.`);
+          console.log(`주제 요약 API 엔드포인트: http://localhost:${API_PORT}/chat/summary`);
+          console.log(`프론트엔드에서 ${SERVER_URL} 대신 http://localhost:${API_PORT}으로 요청을 보내도록 설정하세요.`);
+          console.log('프로그램이 실행 중입니다. 종료하려면 Ctrl+C를 누르세요.');
+          
+          // 서버 객체 반환
+          resolve(server);
+        });
+        
+        server.on('error', (err) => {
+          console.error('서버 시작 오류:', err.message);
+          resolve(null);
+        });
+      } catch (error) {
+        console.error('서버 시작 중 예상치 못한 오류:', error.message);
+        resolve(null);
+      }
+    });
+  } catch (error) {
+    console.error('메인 함수 실행 중 오류:', error);
+    return null;
+  }
 }
 
 // 프로그램 시작 메시지
 console.log('로컬 분류기 스크립트를 초기화합니다...');
 
-// Windows 환경용 스크립트 종료 방지 플래그
-let keepAlive = true;
-
-// 프로그램 실행
-main()
-  .then(server => {
-    // Node.js가 종료되지 않도록 이벤트 루프를 활성 상태로 유지
-    console.log('서버가 성공적으로 시작되었습니다. 이벤트 루프를 유지합니다.');
+// Windows PowerShell에서 실행을 위한 메인 함수 호출
+(async () => {
+  try {
+    const server = await main();
     
-    // SIGINT 처리 (Ctrl+C)
+    if (!server) {
+      console.error('서버 시작에 실패했습니다.');
+      process.exit(1);
+    }
+    
+    console.log('서버가 성공적으로 시작되었습니다.');
+    
+    // 프로세스 종료 이벤트 처리
     process.on('SIGINT', () => {
       console.log('\n프로그램을 종료합니다.');
-      keepAlive = false;
       server.close(() => {
         console.log('서버가 정상적으로 종료되었습니다.');
         process.exit(0);
       });
     });
     
-    // Windows에서도 작동하는 이벤트 루프 유지 방식
-    // 1. setInterval 사용
-    const interval = setInterval(() => {
-      if (!keepAlive) {
-        clearInterval(interval);
-      }
-    }, 1000);
+    // Windows에서 스크립트가 종료되지 않도록 하는 확실한 방법
+    // 파일에 명시적으로 성공 메시지를 기록
+    const fs = require('fs');
+    fs.writeFileSync('local_classifier_running.log', `서버가 ${new Date().toISOString()}에 시작되었습니다.\n`);
     
-    // 2. stdin 사용
-    process.stdin.resume();
-    
-    // 3. Promise 사용
-    return new Promise(resolve => {
-      if (!keepAlive) resolve();
+    // 명시적인 무한 대기 코드
+    await new Promise(() => {
+      // 이 Promise는 의도적으로 resolve를 호출하지 않음 (무한 대기)
+      console.log('서버가 실행 중입니다. 종료하려면 Ctrl+C를 누르세요.');
     });
-  })
-  .catch(error => {
-    console.error('프로그램 실행 오류:', error);
+  } catch (error) {
+    console.error('프로그램 실행 중 예상치 못한 오류:', error);
     process.exit(1);
-  }); 
+  }
+})(); 
