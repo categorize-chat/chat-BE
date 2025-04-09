@@ -29,9 +29,7 @@ async function login(email, password) {
     });
     
     if (response.data.isSuccess) {
-      AUTH_TOKEN = response.data.result.token;
-      console.log('로그인 성공: 토큰이 설정되었습니다.');
-      return AUTH_TOKEN;
+      return response.data.result.token;
     } else {
       console.error('로그인 실패:', response.data.message);
       return null;
@@ -213,29 +211,66 @@ app.get('/health', (req, res) => {
   });
 });
 
+// 포트 사용 가능 여부 확인 및 서버 시작 함수
+async function startServer(port) {
+  return new Promise((resolve, reject) => {
+    try {
+      const svr = app.listen(port, () => {
+        console.log(`로컬 API 서버가 http://localhost:${port}에서 실행 중입니다.`);
+        console.log(`주제 요약 API 엔드포인트: http://localhost:${port}/chat/summary`);
+        console.log(`프론트엔드에서 ${SERVER_URL} 대신 http://localhost:${port}으로 요청을 보내도록 설정하세요.`);
+        resolve(svr);
+      });
+      
+      svr.on('error', (err) => {
+        if (err.code === 'EADDRINUSE') {
+          console.warn(`포트 ${port}가 이미 사용 중입니다.`);
+          resolve(null); // 다른 포트 시도를 위해 null 반환
+        } else {
+          console.error('서버 시작 오류:', err.message);
+          reject(new Error(`서버 시작 오류: ${err.message}`));
+        }
+      });
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
 // 메인 함수
 async function main() {
   try {
     console.log('로컬 분류기 서비스를 시작합니다...');
     
-    // 로그인 정보가 없다면 입력 받음
+    // 인증 토큰 처리
     if (!AUTH_TOKEN) {
+      console.log('AUTH_TOKEN이 없습니다. .env 파일의 인증 정보를 사용하여 로그인합니다.');
       const email = process.env.EMAIL;
       const password = process.env.PASSWORD;
       
       if (!email || !password) {
         console.error('이메일과 비밀번호를 .env 파일에 설정해주세요.');
+        console.error('다음을 .env 파일에 추가해주세요:');
+        console.error('EMAIL=your-email@example.com');
+        console.error('PASSWORD=your-password');
         return null;
       }
       
-      AUTH_TOKEN = await login(email, password);
-      if (!AUTH_TOKEN) {
+      console.log(`서버(${SERVER_URL})에 로그인을 시도합니다...`);
+      const token = await login(email, password);
+      
+      if (!token) {
         console.error('로그인에 실패했습니다. 서비스를 시작할 수 없습니다.');
+        console.error('이메일과 비밀번호를 확인해주세요.');
         return null;
       }
+      
+      // 토큰 설정
+      AUTH_TOKEN = token;
+      console.log('로그인 성공: 토큰이 설정되었습니다.');
+    } else {
+      console.log('기존 토큰을 사용합니다.');
     }
-
-    console.log('인증 성공: 토큰이 설정되었습니다.');
 
     // 모델 서버 연결 확인
     let modelServerAvailable = false;
@@ -244,35 +279,43 @@ async function main() {
     } catch (error) {
       console.error('모델 서버 연결 확인 중 오류가 발생했습니다:', error.message);
       console.warn('모델 서버가 없어도 로컬 API 서버는 시작됩니다.');
-      // 모델 서버가 없어도 계속 진행
     }
 
     // API 서버 시작
     console.log('로컬 API 서버를 시작합니다...');
     let server = null;
+    let portToUse = API_PORT;
     
+    // 여러 포트 시도
     try {
-      server = await new Promise((resolve, reject) => {
-        const svr = app.listen(API_PORT, () => {
-          console.log(`로컬 API 서버가 http://localhost:${API_PORT}에서 실행 중입니다.`);
-          console.log(`주제 요약 API 엔드포인트: http://localhost:${API_PORT}/chat/summary`);
-          console.log(`프론트엔드에서 ${SERVER_URL} 대신 http://localhost:${API_PORT}으로 요청을 보내도록 설정하세요.`);
-          resolve(svr);
-        });
-        
-        svr.on('error', (err) => {
-          console.error('서버 시작 오류:', err.message);
-          // 서버 시작 오류 (예: 포트가 이미 사용 중)
-          reject(new Error(`서버 시작 오류: ${err.message}`));
-        });
-      });
+      server = await startServer(portToUse);
       
-      console.log('API 서버가 성공적으로 시작되었습니다.');
+      // 원래 포트를 사용할 수 없는 경우 다른 포트 시도
+      if (!server) {
+        const alternativePorts = [3001, 3002, 3003, 8080, 8081];
+        
+        for (const port of alternativePorts) {
+          console.log(`대체 포트 ${port}로 서버 시작을 시도합니다...`);
+          server = await startServer(port);
+          
+          if (server) {
+            portToUse = port;
+            break;
+          }
+        }
+      }
+      
+      if (!server) {
+        console.error('사용 가능한 포트를 찾을 수 없습니다.');
+        console.error('다음 포트를 시도했습니다: 3000, 3001, 3002, 3003, 8080, 8081');
+        console.error('.env 파일에서 API_PORT 값을 다른 값으로 변경하거나 기존 프로세스를 종료해주세요.');
+        return null;
+      }
+      
+      console.log(`API 서버가 포트 ${portToUse}에서 성공적으로 시작되었습니다.`);
       return server;
     } catch (error) {
       console.error('API 서버 시작 중 오류:', error.message);
-      console.error('다른 프로세스가 이미 포트 3000을 사용 중일 수 있습니다.');
-      console.error('다른 포트를 사용하려면 .env 파일에서 API_PORT 값을 변경하세요.');
       return null;
     }
   } catch (error) {
