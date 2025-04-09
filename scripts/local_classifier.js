@@ -44,6 +44,12 @@ async function login(email, password) {
         return response.data.result.token;
       }
       
+      // 케이스 1-1: accessToken 필드 확인 (추가)
+      if (response.data.isSuccess === true && response.data.result && response.data.result.accessToken) {
+        console.log('케이스 1-1: accessToken 필드 확인 - 성공');
+        return response.data.result.accessToken;
+      }
+      
       // 케이스 2: success 필드 확인
       if (response.data.success === true && response.data.token) {
         console.log('케이스 2: success 필드 확인 - 성공');
@@ -56,10 +62,22 @@ async function login(email, password) {
         return response.data.token;
       }
       
+      // 케이스 3-1: accessToken 필드 직접 확인 (추가)
+      if (response.data.accessToken) {
+        console.log('케이스 3-1: accessToken 필드 직접 확인 - 성공');
+        return response.data.accessToken;
+      }
+      
       // 케이스 4: data 내부에 token 필드 확인
       if (response.data.data && response.data.data.token) {
         console.log('케이스 4: data 내부에 token 필드 확인 - 성공');
         return response.data.data.token;
+      }
+      
+      // 케이스 4-1: data 내부에 accessToken 필드 확인 (추가)
+      if (response.data.data && response.data.data.accessToken) {
+        console.log('케이스 4-1: data 내부에 accessToken 필드 확인 - 성공');
+        return response.data.data.accessToken;
       }
       
       // 케이스 5: JWT 형식 문자열인 경우
