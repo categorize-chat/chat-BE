@@ -529,7 +529,7 @@ exports.sendChat = async (req, res, next) => {
 // model 서버에 주제 요약 요청하고 그 결과값을 받아옴
 exports.classifyChat = async (req, res, next) => {
   try {
-    const { channelId, howmany } = req.body;
+    const { channelId, howmany, startMessageId } = req.body;
     const userId = req.user.id;
 
     if (!channelId) {
@@ -589,7 +589,7 @@ exports.classifyChat = async (req, res, next) => {
     }
 
     // howmany가 없을 경우 채팅 100개만 분류
-    const result = await classifyTopics(channelId, howmany || 100); 
+    const result = await classifyTopics(channelId, howmany || 100, startMessageId); 
 
     const io = req.app.get("io");
     io.of("/chat").to(channelId).emit("summary", result);
