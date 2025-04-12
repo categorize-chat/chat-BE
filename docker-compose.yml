@@ -5,17 +5,28 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        - BUILD_MODE=${BUILD_MODE:-production}  # production 또는 development
+    image: chat-classifier:${TAG:-latest}
     ports:
-      - "5000:5000"
+      - "${PORT:-5000}:5000"
     volumes:
-      - ./.env:/app/.env
+      - ./.env:/app/.env:ro
       - model_cache:/app/model_cache
       - /dev/urandom:/dev/urandom
       - /dev/random:/dev/random
     environment:
       - PYTHONUNBUFFERED=1
+      - SKIP_MODEL_LOADING=${SKIP_MODEL_LOADING:-false}  # 모델 로딩 건너뛰기 (개발용)
+      - MODEL_CACHE_DIR=/app/model_cache
     restart: unless-stopped
-    
+    deploy:
+      resources:
+        limits:
+          memory: 4G  # 메모리 제한
+        reservations:
+          memory: 2G  # 최소 메모리 요구량
+
 volumes:
   model_cache:
     driver: local 

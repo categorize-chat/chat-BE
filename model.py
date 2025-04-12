@@ -82,6 +82,15 @@ def load_models():
     except Exception as e:
         print(f"모델 로딩 중 오류 발생: {e}")
         print("오류 발생 시 필요한 모델 파일이 /app/model_cache 디렉토리에 존재하는지 확인하세요.")
+        print("또는 환경변수 SKIP_MODEL_LOADING=true 설정으로 모델 로딩을 건너뛸 수 있습니다.")
+        
+        # 환경변수로 모델 로딩 건너뛰기 옵션 추가
+        if os.getenv("SKIP_MODEL_LOADING", "false").lower() == "true":
+            print("SKIP_MODEL_LOADING=true 설정으로 모델 로딩을 건너뜁니다.")
+            klue_tokenizer = None
+            klue_model = None
+            sbert_model = None
+            return
         raise
 
 # OpenAI 클라이언트 초기화 (요약용)
