@@ -3,15 +3,23 @@ FROM python:3.9-slim
 WORKDIR /app
 
 # 필요한 라이브러리만 설치
-RUN pip install --no-cache-dir --upgrade pip
-RUN pip install --no-cache-dir torch==2.0.0+cpu --index-url https://download.pytorch.org/whl/cpu && \
-    pip install --no-cache-dir tensorflow && \
-    pip install --no-cache-dir tokenizers && \
-    pip install --no-cache-dir --no-deps transformers && \
-    pip install --no-cache-dir --no-deps sentence-transformers
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gcc g++ && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir numpy==1.23.5 && \
+    pip install --no-cache-dir torch==1.13.1+cpu --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir transformers==4.30.2 && \
+    pip install --no-cache-dir sentence-transformers==2.2.2 && \
+    pip install --no-cache-dir python-dotenv
 
 # 모델 다운로드 스크립트 복사
 COPY download_models.py .
+
+# 모델 캐시 디렉토리 생성 및 권한 설정
+RUN mkdir -p /app/model_cache && chmod 777 /app/model_cache
 
 # 모델 다운로드 실행
 CMD ["python", "download_models.py"] 

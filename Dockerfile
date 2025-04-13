@@ -12,7 +12,7 @@ ENV CUBLAS_WORKSPACE_CONFIG=:4096:8
 ENV TRANSFORMERS_CACHE=/app/model_cache
 ENV HF_HOME=/app/model_cache
 ENV TORCH_HOME=/app/model_cache
-ENV SKIP_MODEL_LOADING=false
+ENV SKIP_MODEL_LOADING=true
 
 # 기본 파이썬 패키지 설치 
 RUN pip install --no-cache-dir --upgrade pip
@@ -32,10 +32,14 @@ RUN pip install --no-cache-dir numpy==1.23.5 && \
     pip install --no-cache-dir scikit-learn==1.2.2 python-dotenv requests && \
     pip install --no-cache-dir transformers==4.30.2 && \
     pip install --no-cache-dir sentence-transformers==2.2.2 && \
-    pip install --no-cache-dir quart && \
-    find /usr/local/lib/python3.9/site-packages -name "*.pyc" -delete && \
-    find /usr/local/lib/python3.9/site-packages -name "__pycache__" -exec rm -rf {} + && \
-    rm -rf /root/.cache/pip
+    pip install --no-cache-dir quart
+
+# 빌드 단계에서 생성된 캐시 정리
+RUN find /usr/local/lib/python3.9/site-packages -name "*.pyc" -delete && \
+    find /usr/local/lib/python3.9/site-packages -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true && \
+    rm -rf /root/.cache/pip && \
+    rm -rf /app/model_cache/* && \
+    rm -rf /tmp/*
 
 # 최종 이미지 - 실행 환경
 FROM base AS final
@@ -50,11 +54,11 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY model.py .
 COPY .env .
 
-# 포트 노출
-EXPOSE 5000
-
 # 모델 캐시 디렉토리 생성 및 권한 설정
 RUN mkdir -p /app/model_cache && chmod 777 /app/model_cache
+
+# 포트 노출
+EXPOSE 5000
 
 # 컨테이너 시작 시 실행할 명령
 CMD ["python", "model.py"]

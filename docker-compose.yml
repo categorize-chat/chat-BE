@@ -1,6 +1,20 @@
 version: '3'
 
 services:
+  # 모델 다운로드 서비스 - 필요할 때만 실행
+  model-downloader:
+    build:
+      context: .
+      dockerfile: Dockerfile.download
+    image: chat-classifier-downloader:${TAG:-latest}
+    volumes:
+      - model_cache:/app/model_cache
+    environment:
+      - PYTHONUNBUFFERED=1
+    profiles:
+      - download
+
+  # 주 서비스 - 채팅 분류기
   chat-classifier:
     build:
       context: .
@@ -17,7 +31,7 @@ services:
       - /dev/random:/dev/random
     environment:
       - PYTHONUNBUFFERED=1
-      - SKIP_MODEL_LOADING=${SKIP_MODEL_LOADING:-false}  # 모델 로딩 건너뛰기 (개발용)
+      - SKIP_MODEL_LOADING=${SKIP_MODEL_LOADING:-true}  # 모델 로딩 건너뛰기 (true로 기본값 변경)
       - MODEL_CACHE_DIR=/app/model_cache
     restart: unless-stopped
     deploy:
