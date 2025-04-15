@@ -34,6 +34,8 @@ RUN pip install --no-cache-dir numpy==1.23.5 && \
     pip install --no-cache-dir sentence-transformers==2.2.2 && \
     pip install --no-cache-dir quart
 
+RUN pip install --no-cache-dir openai && pip install huggingface-hub==0.23.2
+
 # 빌드 단계에서 생성된 캐시 정리
 RUN find /usr/local/lib/python3.9/site-packages -name "*.pyc" -delete && \
     find /usr/local/lib/python3.9/site-packages -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true && \
