@@ -14,7 +14,6 @@ torch.use_deterministic_algorithms(False)
 
 from quart import Quart, request, jsonify
 import json
-import tensorflow as tf
 import torch.nn.functional as F
 from transformers import AutoTokenizer, AutoModelForNextSentencePrediction
 from sentence_transformers import SentenceTransformer
