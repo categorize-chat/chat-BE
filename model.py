@@ -401,7 +401,11 @@ async def predict():
         print(f"Error in predict: {str(e)}")
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
-    
+
+@app.route('/health', methods=['GET'])
+async def health_check():
+    return jsonify({"status": "healthy", "message": "Model server is running"}), 200
+
 if __name__ == '__main__':
     print("Starting model...")
     try:

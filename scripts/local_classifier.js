@@ -143,12 +143,31 @@ async function classifyChats(roomId, chats) {
     const modelInput = {
       channelId: roomId,
       howmany: chats.length,
-      chats: chats.map(chat => ({
-        id: chat._id,
-        nickname: chat.nickname || chat.user.nickname,
-        content: chat.content,
-        createdAt: chat.createdAt
-      }))
+      chats: chats.map(chat => {
+        // 로그 추가 - 디버깅을 위해 chat 객체의 구조를 출력
+        console.log('채팅 객체 구조:', JSON.stringify(chat, null, 2));
+        
+        let nickname;
+        // 더 안전한 nickname 추출 로직
+        if (chat.nickname) {
+          nickname = chat.nickname;
+        } else if (chat.user && chat.user.nickname) {
+          nickname = chat.user.nickname;
+        } else if (chat.userId && typeof chat.userId === 'object' && chat.userId.nickname) {
+          nickname = chat.userId.nickname;
+        } else {
+          // 기본값 설정 - 닉네임을 찾을 수 없는 경우
+          nickname = '알 수 없음';
+          console.warn(`닉네임을 찾을 수 없음: 채팅 ID ${chat._id}`);
+        }
+        
+        return {
+          id: chat._id,
+          nickname: nickname,
+          content: chat.content,
+          createdAt: chat.createdAt
+        };
+      })
     };
 
     console.log(`모델 서버에 분류 요청을 보냅니다: http://localhost:${MODEL_PORT}/predict`);
@@ -231,36 +250,41 @@ async function checkModelServer() {
     // 여러 가능한 모델 서버 URL 시도
     let error;
     
+    // health 엔드포인트를 시도하고, 실패하면 루트 엔드포인트도 시도
+    async function tryEndpoint(baseUrl, endpointName) {
+      try {
+        const response = await axios.get(`${baseUrl}${endpointName}`);
+        console.log(`모델 서버(${baseUrl})에 ${endpointName} 엔드포인트로 연결되었습니다.`);
+        console.log(`응답 상태: ${response.status}, 응답 데이터:`, response.data);
+        return true;
+      } catch (err) {
+        console.log(`${baseUrl}${endpointName} 연결 실패: ${err.message}`);
+        return false;
+      }
+    }
+    
     // 방법 1: 로컬호스트 시도
-    try {
-      await axios.get(`http://localhost:${MODEL_PORT}/health`);
+    if (await tryEndpoint(`http://localhost:${MODEL_PORT}`, '/health') || 
+        await tryEndpoint(`http://localhost:${MODEL_PORT}`, '/')) {
       console.log(`모델 서버(포트 ${MODEL_PORT})에 연결되었습니다.`);
       return true;
-    } catch (err) {
-      console.log(`로컬호스트 연결 실패: ${err.message}`);
-      error = err;
     }
     
     // 방법 2: 컨테이너 이름 시도
-    try {
-      await axios.get(`http://chat-classifier:${MODEL_PORT}/health`);
+    if (await tryEndpoint(`http://chat-classifier:${MODEL_PORT}`, '/health') ||
+        await tryEndpoint(`http://chat-classifier:${MODEL_PORT}`, '/')) {
       console.log(`컨테이너 이름으로 모델 서버(포트 ${MODEL_PORT})에 연결되었습니다.`);
       return true;
-    } catch (err) {
-      console.log(`컨테이너 이름 연결 실패: ${err.message}`);
     }
     
     // 방법 3: Docker 호스트 IP 시도
-    try {
-      await axios.get(`http://host.docker.internal:${MODEL_PORT}/health`);
+    if (await tryEndpoint(`http://host.docker.internal:${MODEL_PORT}`, '/health') ||
+        await tryEndpoint(`http://host.docker.internal:${MODEL_PORT}`, '/')) {
       console.log(`Docker 호스트 IP로 모델 서버(포트 ${MODEL_PORT})에 연결되었습니다.`);
       return true;
-    } catch (err) {
-      console.log(`Docker 호스트 IP 연결 실패: ${err.message}`);
     }
     
-    // 모든 방법 실패
-    throw error || new Error('모든 연결 방법이 실패했습니다.');
+    throw new Error('모든 연결 방법이 실패했습니다.');
   } catch (error) {
     console.error(`모델 서버(포트 ${MODEL_PORT})에 연결할 수 없습니다. 오류: ${error.message}`);
     console.error('모델 서버가 실행 중인지 확인하세요.');
