@@ -16,12 +16,28 @@ const classifyTopics = async (roomId, howmany = 100) => {
     const modelInput = {
       channelId: roomId.toString(),
       howmany: howmany,
-      chats: chats.map(chat => ({
-        id: chat._id.toString(),
-        nickname: chat.nickname,
-        content: chat.content,
-        createdAt: chat.createdAt.toISOString()
-      }))
+      chats: chats.map(chat => {
+        // 안전한 nickname 추출 로직
+        let nickname;
+        if (chat.nickname) {
+          nickname = chat.nickname;
+        } else if (chat.user && chat.user.nickname) {
+          nickname = chat.user.nickname;
+        } else if (chat.userId && typeof chat.userId === 'object' && chat.userId.nickname) {
+          nickname = chat.userId.nickname;
+        } else {
+          // 기본값 설정 - 닉네임을 찾을 수 없는 경우
+          nickname = '알 수 없음';
+          console.warn(`닉네임을 찾을 수 없음: 채팅 ID ${chat._id}`);
+        }
+        
+        return {
+          id: chat._id.toString(),
+          nickname: nickname,
+          content: chat.content,
+          createdAt: chat.createdAt.toISOString()
+        };
+      })
     };
 
     // Python 모델 서버로 채팅 분류 요청
