@@ -33,6 +33,7 @@ services:
       - PYTHONUNBUFFERED=1
       - SKIP_MODEL_LOADING=${SKIP_MODEL_LOADING:-true}  # 모델 로딩 건너뛰기 (true로 기본값 변경)
       - MODEL_CACHE_DIR=/app/model_cache
+      - MODEL_SERVER_URL=${MODEL_SERVER_URL:-https://chat.travaa.site/model-api/predict}  # 모델 서버 URL
     restart: unless-stopped
     deploy:
       resources:

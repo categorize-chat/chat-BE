@@ -40,8 +40,11 @@ const classifyTopics = async (roomId, howmany = 100) => {
       })
     };
 
+    // 환경 변수에서 모델 서버 URL 가져오기 (기본값은 production 서비스 URL)
+    const modelServerUrl = process.env.MODEL_SERVER_URL || 'https://chat.travaa.site/model-api/predict';
+
     // Python 모델 서버로 채팅 분류 요청
-    const response = await axios.post('http://localhost:5000/predict', modelInput);
+    const response = await axios.post(modelServerUrl, modelInput);
     
     if (response.status === 500 || !response.data) {
       throw new Error('Invalid response from model server');

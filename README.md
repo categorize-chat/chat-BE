@@ -143,7 +143,78 @@ npm run dev
 
 # 채팅 분류 서비스
 
-이 서비스는 채팅 메시지의 토픽을 분류하고 요약하는 API를 제공합니다.
+이 서비스는 채팅 메시지를 주제별로 분류하고 요약하는 기능을 제공합니다.
+
+## 실제 서비스에 분류기 배포하기
+
+현재 chat.travaa.site에 배포된 서비스에 이 분류기를 적용하려면 다음 단계를 따르세요:
+
+### 1. 배포 옵션
+
+#### 옵션 1: 독립적인 모델 API 서버로 배포
+
+1. 서버에 이 저장소를 클론하고 필요한 모델 다운로드
+```bash
+git clone <repository-url> chat-classifier
+cd chat-classifier
+docker-compose --profile download up
+```
+
+2. 환경 변수 설정 (`.env` 파일 생성)
+```
+OPENAI_API_KEY=your_openai_api_key
+```
+
+3. 모델 API 서버 실행
+```bash
+docker-compose up -d
+```
+
+4. 기존 백엔드 서버의 환경 변수 설정
+```
+MODEL_SERVER_URL=http://<your-model-server-ip>:5000/predict
+```
+
+#### 옵션 2: 기존 서비스에 모델 코드 통합
+
+1. 기존 메인 백엔드 서버에 모델 관련 파일 추가
+   - `model.py`
+   - 필요한 Python 패키지를 설치
+   - 필요한 모델 파일 다운로드
+
+2. NGINX 프록시 설정 수정
+```nginx
+# /model-api/ 경로의 요청을 Python 모델 서버로 전달
+location /model-api/ {
+    proxy_pass http://localhost:5000/;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection 'upgrade';
+    proxy_set_header Host $host;
+    proxy_cache_bypass $http_upgrade;
+}
+```
+
+### 2. 설정 및 테스트
+
+1. 환경 변수 설정 확인
+   - 메인 서버: `MODEL_SERVER_URL` 환경 변수가 올바르게 설정되었는지 확인
+   - 모델 서버: `OPENAI_API_KEY` 환경 변수가 올바르게 설정되었는지 확인
+
+2. 테스트
+   - 채팅방에서 분류 기능 테스트
+   - 분류 요청이 모델 서버로 올바르게 전달되는지 로그 확인
+
+### 3. 모니터링 및 문제 해결
+
+- 모델 서버 로그 확인: `docker-compose logs -f`
+- 메인 서버 로그에서 분류 요청/응답 관련 오류 확인
+
+## 문제 해결
+
+- **모델 서버 연결 실패**: MODEL_SERVER_URL이 올바르게 설정되었는지 확인
+- **메모리 부족**: 도커 컴포즈 파일에서 메모리 제한을 조정
+- **느린 응답 시간**: 서버 사양 업그레이드 고려 또는 모델 최적화
 
 ## 최적화된 Docker 빌드 및 실행 방법
 
