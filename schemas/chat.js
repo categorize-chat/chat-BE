@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const User = require('./user');  // User 스키마 import
+const User = require('./user');
 
 const { Schema } = mongoose;
 const chatSchema = new Schema({

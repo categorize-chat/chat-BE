@@ -4,7 +4,7 @@ const User = require('../schemas/user');
 const { generateToken } = require('../utils/jwt');
 const bcrypt = require('bcrypt');
 const { sendVerificationEmail } = require('../services/emailService');
-const { generateVerificationToken } = require('../schemas/user');
+
 const tempStorage = require('../utils/tempStorage');
 
 
@@ -123,7 +123,6 @@ exports.loginUser = async (req, res, next) => {
     res.cookie('refreshToken', refreshToken, {
       path: '/',
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production', // 개발 환경에서는 false
     });
 
     // 응답 반환
@@ -188,21 +187,20 @@ exports.registerLocalUser = async (req, res, next) => {
       });
     }
 
-    // 임시 사용자 객체 생성
-    const userObj = {
+    // 임시 사용자 인스턴스 생성
+    const tempUser = new User({
       nickname,
       email,
       password,
       provider: 'local',
       profileUrl: "https://i.namu.wiki/i/UVVoIACG5XlxNksLitUb_U82uSi5vVlV7086nEtZfqXF0wNHBlpKJKMR9gBEekgUMZoSVr8NOl-JluZWy9De8q1dpwMg3ZMQuDR_GG7OdQXV49tS69czspC7FEP9vS3rC-cLIB6vEJ5oE0EBw_BN5g.webp"
-    };
+    });
 
-    // 인증 토큰 생성
-    const crypto = require('crypto');
-    const verificationToken = crypto.randomBytes(32).toString('hex');
+    // 인증 토큰 생성 (User 스키마의 메서드 사용)
+    const verificationToken = tempUser.generateVerificationToken();
     
     // 임시 저장소에 저장
-    await tempStorage.saveTemp(verificationToken, userObj);
+    await tempStorage.saveTemp(verificationToken, tempUser.toObject());
 
     // 인증 이메일 발송
     await sendVerificationEmail(email, verificationToken);
@@ -230,7 +228,6 @@ exports.logoutUser = async (req, res, next) => {
       path: '/',
       expires: new Date(Date.now() - 3600000), // 현재 시간보다 1시간 전으로 설정
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production', // 개발 환경에서는 false, 배포 환경에서는 true
     });
 
     // 성공 응답 반환

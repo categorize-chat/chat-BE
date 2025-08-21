@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcrypt');
+const crypto = require('crypto');
 
 const { Schema } = mongoose;
 const userSchema = new Schema({
@@ -17,8 +18,8 @@ const userSchema = new Schema({
     type: String,
     default: null
   },
-  lastProfileUpdate: {
-    type: Date,
+  lastProfileUpdateTime: {
+    type: Date, // 마지막으로 업데이트한 바로 그 시간임을 유의해야 함
     default: null
   },
   email: {
@@ -77,16 +78,14 @@ userSchema.methods.comparePassword = async function(candidatePassword) {
 };
 
 userSchema.methods.generateVerificationToken = function() {
-  const crypto = require('crypto');
   this.verificationToken = crypto.randomBytes(32).toString('hex');
-  this.verificationTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24시간
+  this.verificationTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
   return this.verificationToken;
 };
 
 userSchema.methods.generatePasswordResetToken = function() {
-  const crypto = require('crypto');
   this.resetPasswordToken = crypto.randomBytes(32).toString('hex');
-  this.resetPasswordExpires = new Date(Date.now() + 60 * 60 * 1000); // 1시간
+  this.resetPasswordExpires = new Date(Date.now() + 60 * 60 * 1000);
   return this.resetPasswordToken;
 };
 

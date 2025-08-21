@@ -1,12 +1,10 @@
 const express = require('express');
 const cors = require('cors');
 const { authMiddleware } = require('../middlewares/auth');
-const { loginUser } = require('../controllers/auth');
+const { loginUser, logoutUser } = require('../controllers/auth');
 const { registerLocalUser } = require('../controllers/auth');
-const { logoutUser } = require('../controllers/auth');
 const upload = require('../middlewares/uploadMiddleware');
 const profileController = require('../controllers/profileController');
-
 const {
   registerUser, renderMain, createRoom, enterRoom, sendChat, classifyChat, 
   searchRooms, subscribeRoom, unsubscribeRoom, getRooms, getUserSettings, updateUserNickname, getUnreadCount

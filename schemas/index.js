@@ -1,12 +1,9 @@
 const mongoose = require('mongoose');
 
-const {NODE_ENV, MONGODB_URI} = process.env;
+const {MONGODB_URI} = process.env;
 const MONGO_URL = `${MONGODB_URI}`;
 
 const connect = () => {
-  if (NODE_ENV !== 'production') {
-    mongoose.set('debug', true);
-  }
   mongoose.connect(MONGO_URL, {
     dbName: 'aichat',
     useNewUrlParser: true,

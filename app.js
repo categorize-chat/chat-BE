@@ -19,12 +19,10 @@ app.set('port', process.env.PORT || 8005);
 
 connect();
 
-// Redis 연결 초기화 (tempStorage 모듈 내부에서 처리)
 (async () => {
   try {
-    // tempStorage의 아무 메서드나 호출하여 Redis 연결 초기화
     await tempStorage.getTemp('init');
-    console.log('Redis 연결이 초기화되었습니다.');
+    console.log('Redis 연결 성공');
   } catch (error) {
     console.error('Redis 초기화 오류:', error);
   }
