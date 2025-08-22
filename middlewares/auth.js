@@ -1,5 +1,6 @@
-const { verifyToken } = require('../utils/jwt');
+const jwt = require('jsonwebtoken');
 const User = require("../schemas/user");
+const { generateToken } = require('../utils/jwt');
 
 const authMiddleware = async (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -9,17 +10,8 @@ const authMiddleware = async (req, res, next) => {
     const refreshToken = req.cookies.refreshToken;
     if (refreshToken) {
       try {
-        const { valid, expired, decoded } = verifyToken(refreshToken, true);
+        const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
         
-        if (!valid) {
-          return res.status(401).json({
-            isSuccess: false,
-            code: 401,
-            message: expired ? '리프레시 토큰이 만료되었습니다. 다시 로그인해주세요.' : '유효하지 않은 토큰입니다.'
-          });
-        }
-
-        // 사용자 정보 확인
         const user = await User.findById(decoded.id);
         if (!user) {
           return res.status(401).json({
@@ -29,8 +21,6 @@ const authMiddleware = async (req, res, next) => {
           });
         }
 
-        // 새로운 accessToken 발급
-        const { generateToken } = require('../utils/jwt');
         const { accessToken } = generateToken(user);
 
         return res.json({
@@ -43,11 +33,18 @@ const authMiddleware = async (req, res, next) => {
           }
         });
       } catch (error) {
-        console.error('Token refresh error:', error);
-        return res.status(500).json({
+        console.error('토큰 재발급 중 오류 발생: ', error);
+        if (error.name === 'TokenExpiredError') {
+          return res.status(401).json({
+            isSuccess: false,
+            code: 401,
+            message: '리프레시 토큰이 만료되었습니다. 다시 로그인해주세요.'
+          });
+        }
+        return res.status(401).json({
           isSuccess: false,
-          code: 500,
-          message: '토큰 갱신 중 오류가 발생했습니다.'
+          code: 401,
+          message: '유효하지 않은 리프레시 토큰입니다.'
         });
       }
     }
@@ -60,19 +57,27 @@ const authMiddleware = async (req, res, next) => {
   }
 
   const accessToken = authHeader.split(' ')[1];
-  const { valid, expired, decoded } = verifyToken(accessToken);
-
-  if (!valid) {
+  
+  let decoded;
+  try {
+    decoded = jwt.verify(accessToken, process.env.JWT_SECRET);
+    req.user = decoded;
+  } catch (error) {
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({
+        isSuccess: false,
+        code: 401,
+        message: '토큰이 만료되었습니다.'
+      });
+    }
     return res.status(401).json({
       isSuccess: false,
       code: 401,
-      message: expired ? '토큰이 만료되었습니다.' : '유효하지 않은 토큰입니다.'
+      message: '유효하지 않은 토큰입니다.'
     });
   }
-
-  req.user = decoded;
   
-  // 제재 확인
+  // 계정 밴 확인용
   const user = await User.findById(decoded.id);
   if (user.isBanned) {
     return res.status(403).json({

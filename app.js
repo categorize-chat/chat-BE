@@ -22,7 +22,6 @@ connect();
 (async () => {
   try {
     await tempStorage.getTemp('init');
-    console.log('Redis 연결 성공');
   } catch (error) {
     console.error('Redis 초기화 오류:', error);
   }

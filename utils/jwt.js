@@ -1,3 +1,6 @@
+// 원래 있던 verifyToken, verifyRefreshToken 미들웨어는 삭제됨
+// -> 추후 개발 시 유의 필요
+
 const jwt = require('jsonwebtoken');
 
 const generateToken = (user) => {
@@ -21,25 +24,6 @@ const generateToken = (user) => {
   return { accessToken, refreshToken };
 };
 
-const verifyToken = (token, isRefreshToken = false) => {
-  try {
-    const secret = isRefreshToken ? process.env.JWT_REFRESH_SECRET : process.env.JWT_SECRET;
-    const decoded = jwt.verify(token, secret);
-    return {
-      valid: true,
-      expired: false,
-      decoded
-    };
-  } catch (error) {
-    return {
-      valid: false,
-      expired: error.name === "TokenExpiredError",
-      decoded: null
-    };
-  }
-};
-
 module.exports = {
-  generateToken,
-  verifyToken
+  generateToken
 };

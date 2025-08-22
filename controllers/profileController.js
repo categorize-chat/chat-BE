@@ -29,8 +29,8 @@ exports.updateProfileImage = async (req, res, next) => {
     
     // 마지막 프로필 업데이트 시간 확인
     const currentTime = new Date();
-    if (user.lastProfileUpdate) {
-      const lastUpdate = new Date(user.lastProfileUpdate);
+    if (user.lastProfileUpdateTime) {
+      const lastUpdate = new Date(user.lastProfileUpdateTime);
       const timeDifferenceHours = (currentTime - lastUpdate) / (1000 * 60 * 60);
       
       // 마지막 업데이트 후 1시간이 지나지 않은 경우
@@ -52,7 +52,7 @@ exports.updateProfileImage = async (req, res, next) => {
     
     // 사용자 프로필 URL 업데이트 및 마지막 업데이트 시간 기록
     user.profileUrl = imageUrl;
-    user.lastProfileUpdate = currentTime;
+    user.lastProfileUpdateTime = currentTime;
     await user.save();
     
     // 기존 이미지가 S3에 있었다면 삭제 (기본 이미지는 제외)

@@ -1,46 +1,41 @@
 const redis = require('redis');
 
-// 상수 정의
-const EXPIRY_TIME = 24 * 60 * 60; // Redis는 초 단위로 만료시간 설정
-const USER_PREFIX = 'temp_user:';
-const EMAIL_INDEX_KEY = 'email_to_token_index';
+const EXPIRATION_TIME = 24 * 60 * 60;
+const EMAIL_INDEX_KEY = 'tokenIndex';
+// 이메일로 토큰을 찾기 위한 룩업 테이블의 이름이라 생각하면 됨
 
-// Redis 클라이언트 생성 (싱글톤)
-let clientInstance = null;
+let client = null;
 
 const getClient = async () => {
-  if (!clientInstance) {
-    clientInstance = redis.createClient({
-      url: process.env.REDIS_URL || 'redis://localhost:6379'
+  if (!client) {
+    client = redis.createClient({
+      url: process.env.REDIS_URL
     });
     
-    clientInstance.on('error', (err) => console.error('Redis 연결 오류:', err));
-    clientInstance.on('connect', () => console.log('Redis 서버에 연결됨'));
+    client.on('error', (err) => console.error('Redis 서버 연결 오류:', err));
+    client.on('connect', () => console.log('Redis 서버에 연결됨'));
     
-    await clientInstance.connect();
+    await client.connect();
   }
   
-  return clientInstance;
+  return client;
 };
 
 const tempStorage = {
-  // 임시 사용자 저장
   saveTemp: async (token, userData) => {
     try {
-      const client = await getClient();
+      const tempClient = await getClient();
       
-      // 사용자 데이터 저장 (만료시간 설정)
-      await client.setEx(
-        `${USER_PREFIX}${token}`, 
-        EXPIRY_TIME, 
+      // 만료 기간까지 동시에 설정해야 하므로 set 대신 setEx 사용함
+      await tempClient.setEx(
+        token,
+        EXPIRATION_TIME, 
         JSON.stringify(userData)
       );
       
-      // 이메일 역방향 인덱스 추가 (이메일로 토큰 검색을 위해)
       if (userData.email) {
-        await client.hSet(EMAIL_INDEX_KEY, userData.email, token);
-        // 이메일 인덱스도 같은 시간에 만료되도록 설정
-        await client.expire(EMAIL_INDEX_KEY, EXPIRY_TIME);
+        await tempClient.hSet(EMAIL_INDEX_KEY, userData.email, token);
+        await tempClient.expire(EMAIL_INDEX_KEY, EXPIRATION_TIME);
       }
       
       return true;
@@ -50,11 +45,10 @@ const tempStorage = {
     }
   },
 
-  // 임시 사용자 조회
   getTemp: async (token) => {
     try {
-      const client = await getClient();
-      const userData = await client.get(`${USER_PREFIX}${token}`);
+      const tempClient = await getClient();
+      const userData = await tempClient.get(token);
       
       if (!userData) return null;
       return JSON.parse(userData);
@@ -64,17 +58,15 @@ const tempStorage = {
     }
   },
 
-  // 임시 사용자 존재 여부 확인 (email 사용)
   getTokenByEmail: async (email) => {
     try {
-      const client = await getClient();
-      // 이메일 인덱스에서 토큰 조회
-      const token = await client.hGet(EMAIL_INDEX_KEY, email);
+      const tempClient = await getClient();
+
+      const token = await tempClient.hGet(EMAIL_INDEX_KEY, email);
       
       if (!token) return null;
       
-      // 토큰이 유효한지 확인
-      const exists = await client.exists(`${USER_PREFIX}${token}`);
+      const exists = await tempClient.exists(token);
       return exists ? token : null;
     } catch (error) {
       console.error('Redis 이메일 검색 오류:', error);
@@ -82,22 +74,18 @@ const tempStorage = {
     }
   },
 
-  // 임시 사용자 삭제
   removeTemp: async (token) => {
     try {
-      const client = await getClient();
-      // 사용자 데이터 가져오기
-      const userData = await client.get(`${USER_PREFIX}${token}`);
+      const tempClient = await getClient();
+      const userData = await tempClient.get(token);
       if (userData) {
         const parsed = JSON.parse(userData);
         if (parsed.email) {
-          // 이메일 인덱스에서도 삭제
-          await client.hDel(EMAIL_INDEX_KEY, parsed.email);
+          await tempClient.hDel(EMAIL_INDEX_KEY, parsed.email);
         }
       }
       
-      // 사용자 데이터 삭제
-      await client.del(`${USER_PREFIX}${token}`);
+      await tempClient.del(token);
       return true;
     } catch (error) {
       console.error('Redis 삭제 오류:', error);

@@ -19,7 +19,7 @@ const userSchema = new Schema({
     default: null
   },
   lastProfileUpdateTime: {
-    type: Date, // 마지막으로 업데이트한 바로 그 시간임을 유의해야 함
+    type: Date, // 마지막으로 업데이트한 바로 그 시점임을 유의
     default: null
   },
   email: {

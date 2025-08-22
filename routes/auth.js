@@ -1,7 +1,8 @@
 const express = require('express');
 const passport = require('passport');
 const User = require('../schemas/user');
-const { verifyToken, generateToken } = require('../utils/jwt');
+const { generateToken } = require('../utils/jwt');
+const jwt = require('jsonwebtoken');
 const router = express.Router();
 
 const { authKakao } = require('../controllers/auth');
@@ -26,16 +27,7 @@ router.post('/refresh', async (req, res) => {
   }
 
   try {
-    const { valid, expired, decoded } = verifyToken(refreshToken, true);
-
-    if (!valid) {
-      return res.status(401).json({
-        isSuccess: false,
-        code: 401,
-        message: expired ? '만료된 토큰입니다.' : '유효하지 않은 토큰입니다.'
-      });
-    }
-
+    const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
     const user = await User.findById(decoded.id);
     if (!user) {
       return res.status(401).json({
@@ -62,10 +54,17 @@ router.post('/refresh', async (req, res) => {
     });
   } catch (error) {
     console.error('Token refresh error:', error);
-    res.status(500).json({
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({
+        isSuccess: false,
+        code: 401,
+        message: '리프레시 토큰이 만료되었습니다.'
+      });
+    }
+    res.status(401).json({
       isSuccess: false,
-      code: 500,
-      message: '토큰 갱신 중 오류가 발생했습니다.'
+      code: 401,
+      message: '유효하지 않은 리프레시 토큰입니다.'
     });
   }
 });
