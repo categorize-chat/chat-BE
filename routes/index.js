@@ -6,8 +6,8 @@ const { registerLocalUser } = require('../controllers/auth');
 const upload = require('../middlewares/uploadMiddleware');
 const profileController = require('../controllers/profileController');
 const {
-  registerUser, renderMain, createRoom, enterRoom, sendChat, classifyChat, 
-  searchRooms, subscribeRoom, unsubscribeRoom, getRooms, getUserSettings, updateUserNickname, getUnreadCount
+  registerUser, renderRooms, createRoom, enterRoom, sendChat, classifyChat, 
+  searchRooms, subscribeRoom, unsubscribeRoom, getRooms, getUserSettings, updateUserNickname
 } = require('../controllers');
 
 const router = express.Router();
@@ -22,7 +22,7 @@ router.post('/user/logout', logoutUser);
 
 router.post('/user', registerUser);
 
-router.get('/chat', authMiddleware, renderMain);
+router.get('/chat', authMiddleware, renderRooms);
 
 router.get('/search', authMiddleware, getRooms);
 
@@ -44,7 +44,7 @@ router.get('/settings', authMiddleware, getUserSettings);
 
 router.post('/settings/nickname-change', authMiddleware, updateUserNickname);
 
-router.get('/unread', authMiddleware, getUnreadCount);
+
 
 router.post('/settings/profile-image', 
   authMiddleware,

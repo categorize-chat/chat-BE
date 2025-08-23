@@ -1,12 +1,8 @@
 const User = require('../schemas/user');
 const { uploadProfileImage, deleteProfileImage } = require('../utils/s3Service');
 
-/**
- * 프로필 이미지 업데이트 컨트롤러
- */
 exports.updateProfileImage = async (req, res, next) => {
   try {
-    // 요청에 파일이 없는 경우
     if (!req.file) {
       return res.status(400).json({
         isSuccess: false,
@@ -17,7 +13,6 @@ exports.updateProfileImage = async (req, res, next) => {
 
     const userId = req.user.id;
     
-    // 사용자 찾기
     const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({
@@ -33,7 +28,6 @@ exports.updateProfileImage = async (req, res, next) => {
       const lastUpdate = new Date(user.lastProfileUpdateTime);
       const timeDifferenceHours = (currentTime - lastUpdate) / (1000 * 60 * 60);
       
-      // 마지막 업데이트 후 1시간이 지나지 않은 경우
       if (timeDifferenceHours < 1) {
         const remainingMinutes = Math.ceil(60 - (timeDifferenceHours * 60));
         return res.status(429).json({
@@ -44,23 +38,19 @@ exports.updateProfileImage = async (req, res, next) => {
       }
     }
     
-    // 기존 프로필 이미지 URL 저장
     const existingProfileUrl = user.profileUrl;
     
-    // S3에 새 이미지 업로드
     const imageUrl = await uploadProfileImage(req.file, userId);
     
-    // 사용자 프로필 URL 업데이트 및 마지막 업데이트 시간 기록
     user.profileUrl = imageUrl;
     user.lastProfileUpdateTime = currentTime;
     await user.save();
     
-    // 기존 이미지가 S3에 있었다면 삭제 (기본 이미지는 제외)
+    // 기존 이미지가 S3에 있었다면 삭제
     if (existingProfileUrl && !existingProfileUrl.includes('namu.wiki')) {
       await deleteProfileImage(existingProfileUrl);
     }
 
-    // 소켓으로 프로필 업데이트 알림
     if (req.app.get('io')) {
       req.app.get('io').of('/chat').emit('profileUpdate', {
         userId: userId,

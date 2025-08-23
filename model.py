@@ -16,7 +16,6 @@ from openai import OpenAI
 import traceback
 from copy import deepcopy
 
-# .env 파일 로드
 load_dotenv()
 
 app = Quart(__name__)
@@ -49,7 +48,7 @@ klue_model = AutoModelForNextSentencePrediction.from_pretrained("klue/bert-base"
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 klue_model.to(device)
 
-# KR-SBERT 모델 초기화 (임베딩용)
+# KR-SBERT 모델 초기화 (SBERT 임베딩용)
 sbert_model = SentenceTransformer('snunlp/KR-SBERT-V40K-klueNLI-augSTS')
 sbert_model.to(device)
 
@@ -88,21 +87,18 @@ def calculate_time_weight(current_time, thread_time):
 def is_meaningful_chat(content):
     stripped_content = content.strip()
     
-    # 길이 체크를 가장 먼저 (가장 빠른 연산)
     if len(stripped_content) <= 2:
         return False
         
-    # 빈 문자열 체크
     if not stripped_content:
         return False
 
-    # 단순 한글 1-2글자 체크
-    # \u3131 ~ \u3163: 한글 자음/모음 (초성, 중성)
+    # 채팅이 한글 1-2글자로 이루어져 있는지 체크
+    # \u3131 ~ \u3163: 한글 자음/모음
     # \uAC00 ~ \uD7A3: 완성된 글자
     if len(stripped_content) <= 2 and all(('\u3131' <= char <= '\u3163') or ('\uAC00' <= char <= '\uD7A3') for char in stripped_content):
         return False
 
-    # 무의미한 패턴 체크 (가장 비용이 큰 연산을 마지막에)
     if MEANINGLESS_CHAT_PATTERN.match(stripped_content):
         return False
         
@@ -173,17 +169,13 @@ def assign_topic_with_ensemble_model(nsp_model, topics, content, current_time, t
         print("No active topics. Starting a new topic.")
         return len(topics)
 
-    # Get ensemble scores
     scores = ensemble_score(nsp_model, active_topics, content)
     
-    # Calculate time weights for each active topic
     time_weights = np.array([calculate_time_weight(current_time, topic_times[i]) 
                             for i in active_topic_indices])
     
-    # Add time weights to get final scores
     weighted_scores = scores[:len(active_topics)] + time_weights
     
-    # Score for creating a new thread
     new_thread_score = scores[-1] if len(scores) > len(active_topics) else 0
     
     print("\nScoring Details:")
@@ -201,7 +193,7 @@ def assign_topic_with_ensemble_model(nsp_model, topics, content, current_time, t
         print(f"  Base ensemble score: {base_score:.4f}")
         print(f"  Time weight: {time_weight:.4f}")
         print(f"  Final weighted score: {final_score:.4f}")
-        print(f"  Recent messages in topic: {topics[topic_idx][-3:]}")  # Show last 3 messages
+        print(f"  Recent messages in topic: {topics[topic_idx][-3:]}")
     
     print(f"\nNew thread score: {new_thread_score:.4f}")
     print(f"Combined threshold: {combined_threshold}")
@@ -318,23 +310,19 @@ async def predict():
         if not chats:
             return jsonify({'error': 'No chat messages provided'}), 400
             
-        # Convert string dates to datetime objects
         for chat in chats:
             chat['createdAt'] = datetime.fromisoformat(chat['createdAt'].replace('Z', '+00:00'))
         
-        # Process for each parameter set
         topics_per_param = {}
         summaries_per_param = {}        
 
         for param_set, params in PARAMETER_SETS.items():
-            # Run topic classification logic with specific parameters
             topic_mapping, messages, topics, _ = await assign_topics_with_params(
                 deepcopy(chats),
                 params['combined_threshold'],
                 params['consecutive_time']
             )
             
-            # Count chats per topic
             topic_chat_counts = {}
             topics_for_summary = {}
             for chat_id, topic in topic_mapping.items():
@@ -343,16 +331,13 @@ async def predict():
                     topics_for_summary[topic] = []
                 topic_chat_counts[topic] += 1
             
-            # Select significant topics (4+ messages)
             significant_topics = {}
             for topic_id, count in topic_chat_counts.items():
                 if count >= 4 and topic_id >= 0:
                     significant_topics[str(topic_id)] = topics[topic_id]
             
-            # Summarize topics
             topic_summaries = await summarize_all_topics(significant_topics) if significant_topics else {}
             
-            # Prepare result for this parameter set
             topics_per_param[param_set] = [topic_mapping.get(chat["id"], -1) for chat in chats]
             summaries_per_param[param_set] = topic_summaries
         

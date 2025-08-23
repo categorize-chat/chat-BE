@@ -2,3 +2,4 @@
 models
 node_modules
 utils/chats
+utils/db_insert.py

@@ -1,8 +1,8 @@
 const redis = require('redis');
 
 const EXPIRATION_TIME = 24 * 60 * 60;
-const EMAIL_INDEX_KEY = 'tokenIndex';
 // 이메일로 토큰을 찾기 위한 룩업 테이블의 이름이라 생각하면 됨
+const EMAIL_INDEX_KEY = 'tokenIndex';
 
 let client = null;
 

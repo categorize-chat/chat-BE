@@ -3,7 +3,7 @@ const Chat = require('../schemas/chat');
 const axios = require('axios');
 
 const classifyTopics = async (roomId, howmany = 100) => {
-  console.log(`roomId: ${roomId} 채팅 ${howmany}개 분류를 시작합니다.`);
+  console.log(`roomId: ${roomId} 채팅 ${howmany}개 분류 시작`);
   try {
     const chats = await Chat.find({ room: roomId })
       .sort({ createdAt: -1, _id: -1 })
@@ -12,13 +12,28 @@ const classifyTopics = async (roomId, howmany = 100) => {
 
     chats.reverse();
     
+    // content가 비어있는 채팅 필터링
+    // sanitizeHtml을 사용하기 때문에 content가 비어있는 채팅이 생길 수 있음
+    const validChats = chats.filter(chat => chat.content && chat.content.trim().length > 0);
+    
+    console.log(`전체 채팅: ${chats.length}개, 유효한 채팅: ${validChats.length}개`);
+    
+    if (validChats.length === 0) {
+      return {
+        refChat: null,
+        howmany: 0,
+        topics: [],
+        summaries: []
+      };
+    }
+
     const input = {
       channelId: roomId.toString(),
-      howmany: howmany,
-      chats: chats.map(chat => ({
+      howmany: validChats.length,
+      chats: validChats.map(chat => ({
         id: chat._id.toString(),
-        nickname: chat.nickname,
-        content: chat.content,
+        nickname: (chat.user && chat.user.nickname) || chat.nickname || '알 수 없음',
+        content: chat.content.trim(),
         createdAt: chat.createdAt.toISOString()
       }))
     };
@@ -32,13 +47,13 @@ const classifyTopics = async (roomId, howmany = 100) => {
     const {topics, summaries} = response.data;
 
     const result = {
-      refChat: chats[0],
-      howmany,
+      refChat: validChats[0],
+      howmany: validChats.length,
       topics,
       summaries
     };
 
-    console.log(`분류를 완료했습니다.`);
+    console.log(`분류 완료`);
     return result;
 
   } catch (error) {

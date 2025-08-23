@@ -36,7 +36,7 @@ function validateChat(content) {
   return { isValid: true, safeChat };
 }
 
-module.exports = (server, app) => {
+const socketHandler = (server, app) => {
   const io = SocketIO(server, {
     cors: {
       origin: process.env.CLIENT_URL,
@@ -81,7 +81,6 @@ module.exports = (server, app) => {
     
     socket.on("join", async (data) => {
       data.forEach(roomId => {  
-        console.log("채팅방 입장:", roomId, socket.user?.nickname);
         socket.join(roomId);
       });
     });
@@ -292,3 +291,6 @@ async function updateReadCount(userId, roomId) {
     console.error('읽음 상태 업데이트 오류:', error);
   }
 }
+
+module.exports = socketHandler;
+module.exports.validateChat = validateChat;
