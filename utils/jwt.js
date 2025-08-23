@@ -1,5 +1,5 @@
 // 원래 있던 verifyToken, verifyRefreshToken 미들웨어는 삭제됨
-// -> 추후 개발 시 유의 필요
+// 추후 개발 시 유의 필요
 
 const jwt = require('jsonwebtoken');
 
