@@ -141,7 +141,6 @@ exports.searchRooms = async (req, res, next) => {
       });
     }
 
-    // 검색어 길이 제한
     if (searchTerm.length > 100) {
       return res.status(400).json({
         isSuccess: false,

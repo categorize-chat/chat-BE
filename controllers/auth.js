@@ -167,6 +167,14 @@ exports.registerLocalUser = async (req, res, next) => {
       });
     }
 
+    if (password.length > 64) {
+      return res.status(400).json({
+        isSuccess: false,
+        code: 400,
+        message: "비밀번호는 최대 64자까지 입력할 수 있습니다."
+      });
+    }
+
     const tempUser = new User({
       nickname,
       email,
@@ -406,6 +414,14 @@ exports.resetPassword = async (req, res) => {
         isSuccess: false,
         code: 400,
         message: "비밀번호는 최소 8자 이상이어야 합니다."
+      });
+    }
+
+    if (password.length > 64) {
+      return res.status(400).json({
+        isSuccess: false,
+        code: 400,
+        message: "비밀번호는 최대 64자까지 입력할 수 있습니다."
       });
     }
     
