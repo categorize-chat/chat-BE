@@ -1,13 +1,9 @@
 const multer = require('multer');
 
-// 메모리 스토리지 설정 (파일을 메모리에 버퍼로 저장)
 const storage = multer.memoryStorage();
 
-/**
- * 이미지 파일 필터링 함수
- */
 const fileFilter = (req, file, cb) => {
-  // 이미지 파일만 허용
+  // 이미지 파일만 허용해야 함
   if (file.mimetype.startsWith('image/')) {
     cb(null, true);
   } else {
@@ -15,12 +11,12 @@ const fileFilter = (req, file, cb) => {
   }
 };
 
-// 업로드 설정
 const upload = multer({
   storage,
   fileFilter,
   limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB 크기 제한
+    fileSize: 10 * 1024 * 1024, // 이미지 파일 10MB 크기 제한
+    // 사이즈를 크게 잡은 이유는 gif 같은 대용량 파일을 사용할 수 있게 하기 위함
   }
 });
 

@@ -1,7 +1,6 @@
 const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const crypto = require('crypto');
 
-// S3 클라이언트 초기화
 const s3Client = new S3Client({
   region: process.env.AWS_REGION,
   credentials: {
@@ -10,27 +9,16 @@ const s3Client = new S3Client({
   }
 });
 
-/**
- * 고유한 파일명 생성
- * @param {string} originalName - 원본 파일명
- * @returns {string} 생성된 고유 파일명
- */
-const generateUniqueFileName = (originalName) => {
+// 사용자의 개인정보 보호 및 보안 상의 안전을 위함
+const generateUniqueFileName = () => {
   const timestamp = Date.now();
-  const randomString = crypto.randomBytes(8).toString('hex');
-  const extension = originalName.split('.').pop();
-  return `profile-${timestamp}-${randomString}.${extension}`;
+  const randomString = crypto.randomBytes(4).toString('hex');
+  return `profile-${timestamp}-${randomString}`;
 };
 
-/**
- * S3에 이미지 업로드
- * @param {Object} file - multer 업로드 파일 객체
- * @param {string} userId - 사용자 ID
- * @returns {Promise<string>} 업로드된 이미지 URL
- */
 const uploadProfileImage = async (file, userId) => {
   try {
-    const fileName = generateUniqueFileName(file.originalname);
+    const fileName = generateUniqueFileName();
     const key = `profiles/${userId}/${fileName}`;
     
     const uploadParams = {
@@ -51,19 +39,12 @@ const uploadProfileImage = async (file, userId) => {
   }
 };
 
-/**
- * S3에서 이미지 삭제
- * @param {string} imageUrl - 삭제할 이미지 URL
- * @returns {Promise<void>}
- */
 const deleteProfileImage = async (imageUrl) => {
   try {
-    // 기본 이미지이거나 S3 URL이 아닌 경우 무시
     if (!imageUrl || !imageUrl.includes(process.env.AWS_S3_BUCKET_NAME)) {
       return;
     }
     
-    // S3 URL에서 키 추출
     const key = imageUrl.split('.com/')[1];
     
     const deleteParams = {
@@ -73,10 +54,9 @@ const deleteProfileImage = async (imageUrl) => {
     
     const command = new DeleteObjectCommand(deleteParams);
     await s3Client.send(command);
-    console.log(`S3에서 이미지 삭제 완료: ${key}`);
+    console.log(`S3에서 이미지 삭제 완료`);
   } catch (error) {
     console.error('S3 이미지 삭제 오류:', error);
-    // 삭제 실패해도 계속 진행 (중요하지 않은 작업)
   }
 };
 

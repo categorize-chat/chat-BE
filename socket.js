@@ -2,44 +2,41 @@ const SocketIO = require("socket.io");
 const Room = require("./schemas/room");
 const Chat = require("./schemas/chat");
 const User = require("./schemas/user");
-const { verifyToken } = require('./utils/jwt');
+const jwt = require('jsonwebtoken');
+const sanitizeHtml = require('sanitize-html');
 
-function validateAndSanitizeChat(content) {
+function validateChat(content) {
   if (!content || typeof content !== 'string') {
-    return { 
+    return {
       isValid: false, 
-      message: "올바른 채팅 내용을 입력해주세요. 문자열 형태여야 합니다." 
+      message: "올바른 채팅 형식이 아닙니다." 
     };
   }
 
-  const trimmedContent = content.trim();
+  const chat = content.trim();
   
-  if (trimmedContent.length === 0) {
+  if (chat.length === 0) {
     return { 
       isValid: false, 
       message: "채팅 내용을 입력해주세요." 
     };
   }
   
-  if (trimmedContent.length > 1000) {
+  if (chat.length > 1000) {
     return { 
       isValid: false, 
       message: "채팅은 1000자 이하여야 합니다." 
     };
   }
 
-  const sanitizedContent = trimmedContent
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#x27;')
-    .replace(/\//g, '&#x2F;');
+  // XSS 공격 방지
+  // 기존의 replace 방식보다 전문가들이 제공하는 모듈이 훨씬 더 안전하다고 생각해서 변경함
+  const safeChat = sanitizeHtml(chat);
 
-  return { isValid: true, sanitizedContent };
+  return { isValid: true, safeChat };
 }
 
-module.exports = (server, app) => {
+const socketHandler = (server, app) => {
   const io = SocketIO(server, {
     cors: {
       origin: process.env.CLIENT_URL,
@@ -52,94 +49,69 @@ module.exports = (server, app) => {
   const room = io.of("/room");
   const chat = io.of("/chat");
 
-  // Socket 인증 미들웨어
   const socketAuthMiddleware = (socket, next) => {
     const token = socket.handshake.auth.token;
     if (!token) {
-      return next(new Error('Authentication error'));
+      return next(new Error('토큰 없음'));
     }
 
-    const { valid, decoded } = verifyToken(token);
-    if (!valid) {
-      return next(new Error('Invalid token'));
+    try {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      socket.user = decoded;
+    } catch (error) {
+      return next(new Error('유효하지 않은 토큰'));
     }
-
-    socket.user = decoded;
     next();
   };
 
   chat.use(socketAuthMiddleware);
 
   room.on("connection", (socket) => {
-    console.log("room 네임스페이스에 접속");
     socket.on("disconnect", () => {
-      console.log("room 네임스페이스 접속 해제");
     });
   });
 
   chat.on("connection", (socket) => {
-    console.log("chat 네임스페이스에 접속:", socket.id, socket.user?.nickname);
     
-    // 에러 이벤트 리스너 추가
     socket.on("error", (error) => {
       console.error("소켓 에러:", error);
     });
     
-    // 현재 사용자가 보고 있는 채팅방 ID를 저장
     let currentViewingRoom = null;
     
     socket.on("join", async (data) => {
       data.forEach(roomId => {  
-        console.log("채팅방 입장:", roomId, socket.user?.nickname);
         socket.join(roomId);
       });
-
-      try {
-        // TODO: 채팅방에 유저 추가
-        // const room = await Room.findById(data);
-        // if (room && !room.participants.includes(socket.user.id)) {
-        //   room.participants.push(socket.user.id);
-        //   await room.save();
-        // }
-      } catch (error) {
-        console.error('Room join error:', error);
-      }
     });
 
-    // 사용자가 채팅방 화면을 보고 있을 때 읽음 상태 업데이트
+    // 사용자가 해당 채팅방 화면을 보고 있을 때 읽음 상태 업데이트 해야함
     socket.on("view", async (roomId) => {
         currentViewingRoom = roomId;
       try {
-        console.log(`사용자 ${socket.user.nickname}(${socket.user.id})가 채팅방 ${roomId}를 보고 있습니다.`);
-        
-        // 채팅방을 보고 있으므로 모든 메시지를 읽은 것으로 처리
-        await updateUserReadCount(socket.user.id, roomId);
+        await updateReadCount(socket.user.id, roomId);
       } catch (error) {
         console.error('채팅방 읽음 상태 업데이트 오류:', error);
       }
     });
     
-    // 사용자가 채팅방 화면을 벗어날 때
     socket.on("leave", () => {
       currentViewingRoom = null;
     });
 
     socket.on("message", async (data) => {
-      console.log('메시지 수신:', data);
       
       try {
-        // 필수 데이터 확인
         if (!data || !data.room || !data.content) {
           console.error('잘못된 메시지 형식:', data);
           return socket.emit("error", { 
-            message: "메시지 형식이 올바르지 않습니다. room과 content가 필요합니다." 
+            message: "메시지 형식이 올바르지 않습니다." 
           });
         }
         
         const userId = socket.user.id;
         const roomId = data.room;
     
-        // 사용자 구독 정보 확인
         const user = await User.findById(userId).select('subscriptions');
         if (!user) {
           console.error('사용자를 찾을 수 없음:', userId);
@@ -148,7 +120,7 @@ module.exports = (server, app) => {
           });
         }
     
-        // 구독 여부 확인
+        // 채팅방 구독 여부 확인
         const isSubscribed = user.subscriptions.includes(roomId);
         if (!isSubscribed) {
           console.error('구독하지 않은 채팅방:', { userId, roomId });
@@ -157,7 +129,6 @@ module.exports = (server, app) => {
           });
         }
     
-        // 방 존재 여부 확인
         const room = await Room.findById(roomId)
           .populate({
             path: 'lastMessage',
@@ -174,28 +145,21 @@ module.exports = (server, app) => {
           });
         }
     
-        // 메시지 검증
-        const validation = validateAndSanitizeChat(data.content);
+        const validation = validateChat(data.content);
         if (!validation.isValid) {
           console.error('메시지 검증 실패:', { content: data.content, message: validation.message });
           return socket.emit("error", { 
             message: validation.message 
           });
         }
-    
-        console.log('메시지 저장 시작:', { roomId, userId, content: validation.sanitizedContent });
         
-        // 검증된 내용으로 채팅 생성
         const chat = await Chat.create({
           room: roomId,
           user: userId,
-          content: validation.sanitizedContent,
+          content: validation.safeChat,
           createdAt: new Date(),
         });
         
-        console.log('채팅 생성 완료:', chat._id);
-        
-        // 1. Room의 totalMessageCount 증가 및 lastMessage 업데이트 (원자적 연산)
         await Room.updateOne(
           { _id: roomId },
           { 
@@ -204,22 +168,17 @@ module.exports = (server, app) => {
           }
         );
         
-        // 2. 메시지 전송자의 읽음 상태 업데이트 (자신이 보낸 메시지는 읽은 것으로 처리)
-        await updateUserReadCount(userId, roomId);
+        // 자신이 보낸 메시지는 읽은 것으로 처리
+        await updateReadCount(userId, roomId);
         
-        // populate로 user 정보를 포함하여 조회
         const populatedChat = await Chat.findById(chat._id)
           .populate('user', 'nickname profileUrl email');
         
-        console.log('채팅 발송 준비 완료:', { chatId: chat._id, roomId });
-        
-        // 채팅 발송
         io.of("/chat").to(roomId).emit("chat", populatedChat);
         
         // 새로운 메시지가 도착했을 때 현재 채팅방을 보고 있는 모든 사용자의 읽음 상태 업데이트
-        updateActiveViewersReadCount(roomId, io);
+        updateCurrentViewingReadCount(roomId, io);
         
-        console.log('채팅 발송 완료');
       } catch (error) {
         console.error('메시지 처리 오류:', error);
         socket.emit("error", { 
@@ -230,18 +189,15 @@ module.exports = (server, app) => {
     });
 
     socket.on("disconnect", async () => {
-      console.log("chat 네임스페이스 접속 해제");
       
       try {
-        // 현재 소켓이 참여중인 모든 방 목록 가져오기
         const rooms = Array.from(socket.rooms);
         
-        // socket.rooms에는 자신의 socket.id도 포함되어 있으므로 제외
         const chatRooms = rooms.filter(room => room !== socket.id);
         
         // 각 방에서 퇴장 처리
         for (const roomId of chatRooms) {
-          if (!roomId) continue;  // roomId가 빈 문자열이면 스킵
+          if (!roomId) continue;
 
           const room = await Room.findById(roomId)
             .populate({
@@ -271,25 +227,22 @@ module.exports = (server, app) => {
   });
 };
 
-// 새로운 함수: 현재 채팅방을 보고 있는 모든 사용자의 읽음 상태 업데이트
-async function updateActiveViewersReadCount(roomId, io) {
+// 메시지가 왔을 때 현재 채팅방을 보고 있는 모든 사용자의 읽음 상태 업데이트
+async function updateCurrentViewingReadCount(roomId, io) {
   try {
-    // 해당 채팅방의 소켓 목록 가져오기
     const sockets = await io.of('/chat').in(roomId).fetchSockets();
     
     for (const socket of sockets) {
-      // 소켓에 사용자 정보가 있고, 현재 보고 있는 채팅방이 해당 roomId와 일치하는 경우
       if (socket.user && socket.currentViewingRoom === roomId) {
-        await updateUserReadCount(socket.user.id, roomId);
+        await updateReadCount(socket.user.id, roomId);
       }
     }
   } catch (error) {
-    console.error('활성 사용자 읽음 상태 업데이트 오류:', error);
+    console.error('읽음 상태 업데이트 오류:', error);
   }
 }
 
-// 사용자의 읽음 상태 업데이트 함수
-async function updateUserReadCount(userId, roomId) {
+async function updateReadCount(userId, roomId) {
   try {
     const room = await Room.findById(roomId)
       .populate({
@@ -302,14 +255,13 @@ async function updateUserReadCount(userId, roomId) {
       });
     if (!room) return;
     
-    // 현재 방의 총 메시지 수 가져오기
+
     const totalMessageCount = room.totalMessageCount;
     
-    // 사용자 정보 가져오기
+
     const user = await User.findById(userId);
     if (!user) return;
     
-    // readCounts가 없으면 초기화
     if (!user.readCounts) {
       await User.updateOne(
         { _id: userId },
@@ -317,12 +269,10 @@ async function updateUserReadCount(userId, roomId) {
       );
     }
     
-    // 현재 사용자의 해당 방에 대한 읽음 상태
     const currentReadCount = user.readCounts && user.readCounts[roomId] 
       ? user.readCounts[roomId] 
       : 0;
     
-    // 사용자가 이미 최신 상태라면 업데이트하지 않음
     if (currentReadCount >= totalMessageCount) {
       return;
     }
@@ -337,9 +287,10 @@ async function updateUserReadCount(userId, roomId) {
       { $set: updateQuery }
     );
     
-    // 간결한 디버깅 로그
-    console.log(`읽음 상태 업데이트: 사용자=${userId}, 방=${roomId}, 읽은 메시지 수=${totalMessageCount}`);
   } catch (error) {
     console.error('읽음 상태 업데이트 오류:', error);
   }
 }
+
+module.exports = socketHandler;
+module.exports.validateChat = validateChat;

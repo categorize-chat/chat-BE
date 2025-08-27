@@ -5,7 +5,6 @@ const axios = require('axios');
 const classifyTopics = async (roomId, howmany = 100) => {
   console.log(`roomId: ${roomId} 채팅 ${howmany}개 분류 시작`);
   try {
-    // MongoDB에서 최근 채팅 데이터 howmany개 가져오기
     const chats = await Chat.find({ room: roomId })
       .sort({ createdAt: -1, _id: -1 })
       .limit(howmany)
@@ -13,39 +12,52 @@ const classifyTopics = async (roomId, howmany = 100) => {
 
     chats.reverse();
     
-    const modelInput = {
+    // content가 비어있는 채팅 필터링
+    // sanitizeHtml을 사용하기 때문에 content가 비어있는 채팅이 생길 수 있음
+    const validChats = chats.filter(chat => chat.content && chat.content.trim().length > 0);
+    
+    console.log(`전체 채팅: ${chats.length}개, 유효한 채팅: ${validChats.length}개`);
+    
+    if (validChats.length === 0) {
+      return {
+        refChat: null,
+        howmany: 0,
+        topics: [],
+        summaries: []
+      };
+    }
+
+    const input = {
       channelId: roomId.toString(),
-      howmany: howmany,
-      chats: chats.map(chat => ({
+      howmany: validChats.length,
+      chats: validChats.map(chat => ({
         id: chat._id.toString(),
-        nickname: chat.nickname,
-        content: chat.content,
+        nickname: (chat.user && chat.user.nickname) || chat.nickname || '알 수 없음',
+        content: chat.content.trim(),
         createdAt: chat.createdAt.toISOString()
       }))
     };
 
-    // Python 모델 서버로 채팅 분류 요청
-    const response = await axios.post('http://localhost:5000/predict', modelInput);
+    const response = await axios.post('http://localhost:5000/predict', input);
     
-    if (response.status === 500 || !response.data) {
-      throw new Error('Invalid response from model server');
+    if (!response.data) {
+      throw new Error('모델 서버의 응답이 없습니다.');
     }
 
-    
-    const {topics, summaries} = response.data
+    const {topics, summaries} = response.data;
 
     const result = {
-      refChat: chats[0],
-      howmany,
+      refChat: validChats[0],
+      howmany: validChats.length,
       topics,
       summaries
-    }
+    };
 
-    console.log(`roomId: ${roomId} 분류 완료`);
-    return result
+    console.log(`분류 완료`);
+    return result;
 
   } catch (error) {
-    console.error('Error in classifyTopics:', error);
+    console.error('분류 중 오류 발생: ', error);
     throw error;
   }
 };
