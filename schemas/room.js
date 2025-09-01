@@ -41,4 +41,7 @@ const roomSchema = new Schema({
   timestamps: true
 });
 
+roomSchema.index({ createdAt: -1 });
+roomSchema.index({ channelName: 1 });
+
 module.exports = mongoose.model('Room', roomSchema);
