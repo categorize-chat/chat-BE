@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require("../schemas/user");
-const { generateToken } = require('../utils/jwt');
+const { generateToken, isBlacklisted, isUserTokenRevoked, getCachedUserStatus, cacheUserStatus } = require('../utils/jwt');
 
 const authMiddleware = async (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -10,7 +10,23 @@ const authMiddleware = async (req, res, next) => {
     const refreshToken = req.cookies.refreshToken;
     if (refreshToken) {
       try {
+        if (await isBlacklisted(refreshToken)) {
+          return res.status(401).json({
+            isSuccess: false,
+            code: 401,
+            message: '리프레시 토큰이 무효화되었습니다. 다시 로그인해주세요.'
+          });
+        }
+
         const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
+        
+        if (await isUserTokenRevoked(decoded.id, decoded.iat)) {
+          return res.status(401).json({
+            isSuccess: false,
+            code: 401,
+            message: '계정 정지로 인해 모든 토큰이 무효화되었습니다. 다시 로그인해주세요.'
+          });
+        }
         
         const user = await User.findById(decoded.id);
         if (!user) {
@@ -18,6 +34,14 @@ const authMiddleware = async (req, res, next) => {
             isSuccess: false,
             code: 401,
             message: '존재하지 않는 사용자입니다.'
+          });
+        }
+
+        if (user.isBanned) {
+          return res.status(403).json({
+            isSuccess: false,
+            code: 403,
+            message: "계정이 정지되었습니다."
           });
         }
 
@@ -58,6 +82,14 @@ const authMiddleware = async (req, res, next) => {
 
   const accessToken = authHeader.split(' ')[1];
   
+  if (await isBlacklisted(accessToken)) {
+    return res.status(401).json({
+      isSuccess: false,
+      code: 401,
+      message: '토큰이 무효화되었습니다. 다시 로그인해주세요.'
+    });
+  }
+  
   let decoded;
   try {
     decoded = jwt.verify(accessToken, process.env.JWT_SECRET);
@@ -77,14 +109,44 @@ const authMiddleware = async (req, res, next) => {
     });
   }
   
-  // 계정 밴 확인용
-  const user = await User.findById(decoded.id);
-  if (user.isBanned) {
-    return res.status(403).json({
+  if (await isUserTokenRevoked(decoded.id, decoded.iat)) {
+    return res.status(401).json({
       isSuccess: false,
-      code: 403,
-      message: "계정이 정지되었습니다."
+      code: 401,
+      message: '계정 정지로 인해 모든 토큰이 무효화되었습니다. 다시 로그인해주세요.'
     });
+  }
+  
+  let cachedStatus = await getCachedUserStatus(decoded.id);
+  
+  if (cachedStatus) {
+    if (cachedStatus.isBanned) {
+      return res.status(403).json({
+        isSuccess: false,
+        code: 403,
+        message: "계정이 정지되었습니다."
+      });
+    }
+  } else {
+    const user = await User.findById(decoded.id);
+    if (!user) {
+      return res.status(401).json({
+        isSuccess: false,
+        code: 401,
+        message: '존재하지 않는 사용자입니다.'
+      });
+    }
+    
+    // 사용자 상태 캐싱 (5분간 저장)
+    await cacheUserStatus(decoded.id, user.isBanned, 300);
+    
+    if (user.isBanned) {
+      return res.status(403).json({
+        isSuccess: false,
+        code: 403,
+        message: "계정이 정지되었습니다."
+      });
+    }
   }
   
   next();

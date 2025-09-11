@@ -49,17 +49,63 @@ exports.renderRooms = async (req, res) => {
       });
     }
     
-    const rooms = await Room.find({
-      _id: { $in: user.subscriptions }
-    }).populate('owner participants')
-      .populate({
-        path: 'lastMessage',
-        select: 'content createdAt',
-        populate: {
-          path: 'user',
-          select: 'nickname profileUrl'
+    const rooms = await Room.aggregate([
+      {
+        $match: { _id: { $in: user.subscriptions } }
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'owner',
+          foreignField: '_id',
+          as: 'owner'
         }
-      });
+      },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'participants',
+          foreignField: '_id',
+          as: 'participants'
+        }
+      },
+      {
+        $lookup: {
+          from: 'chats',
+          localField: 'lastMessage',
+          foreignField: '_id',
+          as: 'lastMessageData',
+          pipeline: [
+            {
+              $lookup: {
+                from: 'users',
+                localField: 'user',
+                foreignField: '_id',
+                as: 'user',
+                pipeline: [
+                  { $project: { nickname: 1, profileUrl: 1 } }
+                ]
+              }
+            },
+            { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
+            { $project: { content: 1, createdAt: 1, user: 1 } }
+          ]
+        }
+      },
+      {
+        $unwind: { path: '$lastMessageData', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $addFields: {
+          lastMessage: '$lastMessageData'
+        }
+      },
+      {
+        $project: {
+          lastMessageData: 0
+        }
+      }
+    ]);
 
     const channelsWithCounts = rooms.map(room => {
       const roomId = room._id.toString();
@@ -103,19 +149,69 @@ exports.renderRooms = async (req, res) => {
 exports.getRooms = async (req, res, next) => {
   try {
     // 프론트와의 협의로 가장 최근 15개 채팅방만 제공하기로 결정
-    const channels = await Room.find()
-      .limit(15)
-      .populate('owner', 'nickname')
-      .populate('participants', 'nickname profileUrl')
-      .populate({
-        path: 'lastMessage',
-        select: 'content createdAt',
-        populate: {
-          path: 'user',
-          select: 'nickname profileUrl'
+    const channels = await Room.aggregate([
+      { $sort: { createdAt: -1 } },
+      { $limit: 15 },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'owner',
+          foreignField: '_id',
+          as: 'owner',
+          pipeline: [
+            { $project: { nickname: 1 } }
+          ]
         }
-      })
-      .sort({ createdAt: -1 });
+      },
+      { $unwind: { path: '$owner', preserveNullAndEmptyArrays: true } },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'participants',
+          foreignField: '_id',
+          as: 'participants',
+          pipeline: [
+            { $project: { nickname: 1, profileUrl: 1 } }
+          ]
+        }
+      },
+      {
+        $lookup: {
+          from: 'chats',
+          localField: 'lastMessage',
+          foreignField: '_id',
+          as: 'lastMessageData',
+          pipeline: [
+            {
+              $lookup: {
+                from: 'users',
+                localField: 'user',
+                foreignField: '_id',
+                as: 'user',
+                pipeline: [
+                  { $project: { nickname: 1, profileUrl: 1 } }
+                ]
+              }
+            },
+            { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
+            { $project: { content: 1, createdAt: 1, user: 1 } }
+          ]
+        }
+      },
+      {
+        $unwind: { path: '$lastMessageData', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $addFields: {
+          lastMessage: '$lastMessageData'
+        }
+      },
+      {
+        $project: {
+          lastMessageData: 0
+        }
+      }
+    ]);
 
     res.json({
       isSuccess: true,
@@ -151,23 +247,76 @@ exports.searchRooms = async (req, res, next) => {
 
     const escapedSearchTerm = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-    const channels = await Room.find({ 
-      channelName: { 
-        $regex: new RegExp(escapedSearchTerm, 'i') 
-      } 
-    })
-      .limit(50)
-      .populate('owner', 'nickname email profileUrl')
-      .populate('participants', 'nickname email profileUrl')
-      .populate({
-        path: 'lastMessage',
-        select: 'content createdAt',
-        populate: {
-          path: 'user',
-          select: 'nickname profileUrl'
+    const channels = await Room.aggregate([
+      {
+        $match: {
+          channelName: { 
+            $regex: new RegExp(escapedSearchTerm, 'i') 
+          }
         }
-      })
-      .sort({ createdAt: -1 });
+      },
+      { $sort: { createdAt: -1 } },
+      { $limit: 50 },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'owner',
+          foreignField: '_id',
+          as: 'owner',
+          pipeline: [
+            { $project: { nickname: 1, email: 1, profileUrl: 1 } }
+          ]
+        }
+      },
+      { $unwind: { path: '$owner', preserveNullAndEmptyArrays: true } },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'participants',
+          foreignField: '_id',
+          as: 'participants',
+          pipeline: [
+            { $project: { nickname: 1, email: 1, profileUrl: 1 } }
+          ]
+        }
+      },
+      {
+        $lookup: {
+          from: 'chats',
+          localField: 'lastMessage',
+          foreignField: '_id',
+          as: 'lastMessageData',
+          pipeline: [
+            {
+              $lookup: {
+                from: 'users',
+                localField: 'user',
+                foreignField: '_id',
+                as: 'user',
+                pipeline: [
+                  { $project: { nickname: 1, profileUrl: 1 } }
+                ]
+              }
+            },
+            { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
+            { $project: { content: 1, createdAt: 1, user: 1 } }
+          ]
+        }
+      },
+      {
+        $unwind: { path: '$lastMessageData', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $addFields: {
+          lastMessage: '$lastMessageData'
+        }
+      },
+      {
+        $project: {
+          lastMessageData: 0
+        }
+      }
+    ]);
     
     res.json({
       isSuccess: true,
@@ -307,17 +456,70 @@ exports.enterRoom = async (req, res, next) => {
       });
     }
 
-    const room = await Room.findById(roomId)
-      .populate('owner', 'nickname')
-      .populate('participants', 'nickname profileUrl')
-      .populate({
-        path: 'lastMessage',
-        select: 'content createdAt',
-        populate: {
-          path: 'user',
-          select: 'nickname profileUrl'
+    const roomResult = await Room.aggregate([
+      { $match: { _id: new mongoose.Types.ObjectId(roomId) } },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'owner',
+          foreignField: '_id',
+          as: 'owner',
+          pipeline: [
+            { $project: { nickname: 1 } }
+          ]
         }
-      });
+      },
+      { $unwind: { path: '$owner', preserveNullAndEmptyArrays: true } },
+      {
+        $lookup: {
+          from: 'users',
+          localField: 'participants',
+          foreignField: '_id',
+          as: 'participants',
+          pipeline: [
+            { $project: { nickname: 1, profileUrl: 1 } }
+          ]
+        }
+      },
+      {
+        $lookup: {
+          from: 'chats',
+          localField: 'lastMessage',
+          foreignField: '_id',
+          as: 'lastMessageData',
+          pipeline: [
+            {
+              $lookup: {
+                from: 'users',
+                localField: 'user',
+                foreignField: '_id',
+                as: 'user',
+                pipeline: [
+                  { $project: { nickname: 1, profileUrl: 1 } }
+                ]
+              }
+            },
+            { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
+            { $project: { content: 1, createdAt: 1, user: 1 } }
+          ]
+        }
+      },
+      {
+        $unwind: { path: '$lastMessageData', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $addFields: {
+          lastMessage: '$lastMessageData'
+        }
+      },
+      {
+        $project: {
+          lastMessageData: 0
+        }
+      }
+    ]);
+    
+    const room = roomResult[0];
       
     if (!room) {
       return res.status(404).json({
@@ -407,15 +609,47 @@ exports.sendChat = async (req, res, next) => {
       });
     }
 
-    const room = await Room.findById(roomId)
-      .populate({
-        path: 'lastMessage',
-        select: 'content createdAt',
-        populate: {
-          path: 'user',
-          select: 'nickname profileUrl'
+    const roomResult = await Room.aggregate([
+      { $match: { _id: new mongoose.Types.ObjectId(roomId) } },
+      {
+        $lookup: {
+          from: 'chats',
+          localField: 'lastMessage',
+          foreignField: '_id',
+          as: 'lastMessageData',
+          pipeline: [
+            {
+              $lookup: {
+                from: 'users',
+                localField: 'user',
+                foreignField: '_id',
+                as: 'user',
+                pipeline: [
+                  { $project: { nickname: 1, profileUrl: 1 } }
+                ]
+              }
+            },
+            { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
+            { $project: { content: 1, createdAt: 1, user: 1 } }
+          ]
         }
-      });
+      },
+      {
+        $unwind: { path: '$lastMessageData', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $addFields: {
+          lastMessage: '$lastMessageData'
+        }
+      },
+      {
+        $project: {
+          lastMessageData: 0
+        }
+      }
+    ]);
+    
+    const room = roomResult[0];
 
     if (!room) {
       return res.status(404).json({
@@ -500,15 +734,47 @@ exports.classifyChat = async (req, res, next) => {
       });
     }
 
-    const room = await Room.findById(channelId)
-      .populate({
-        path: 'lastMessage',
-        select: 'content createdAt',
-        populate: {
-          path: 'user',
-          select: 'nickname profileUrl'
+    const roomResult = await Room.aggregate([
+      { $match: { _id: new mongoose.Types.ObjectId(channelId) } },
+      {
+        $lookup: {
+          from: 'chats',
+          localField: 'lastMessage',
+          foreignField: '_id',
+          as: 'lastMessageData',
+          pipeline: [
+            {
+              $lookup: {
+                from: 'users',
+                localField: 'user',
+                foreignField: '_id',
+                as: 'user',
+                pipeline: [
+                  { $project: { nickname: 1, profileUrl: 1 } }
+                ]
+              }
+            },
+            { $unwind: { path: '$user', preserveNullAndEmptyArrays: true } },
+            { $project: { content: 1, createdAt: 1, user: 1 } }
+          ]
         }
-      });
+      },
+      {
+        $unwind: { path: '$lastMessageData', preserveNullAndEmptyArrays: true }
+      },
+      {
+        $addFields: {
+          lastMessage: '$lastMessageData'
+        }
+      },
+      {
+        $project: {
+          lastMessageData: 0
+        }
+      }
+    ]);
+    
+    const room = roomResult[0];
 
     if (!room) {
       return res.status(404).json({

@@ -24,4 +24,6 @@ const chatSchema = new Schema({
   },
 });
 
+chatSchema.index({ room: 1, createdAt: -1 });
+
 module.exports = mongoose.model('Chat', chatSchema);
