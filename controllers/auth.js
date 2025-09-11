@@ -1,7 +1,7 @@
 const axios = require('axios');
 const jwt = require('jsonwebtoken');
 const User = require('../schemas/user');
-const { generateToken } = require('../utils/jwt');
+const { generateToken, addToBlacklist } = require('../utils/jwt');
 const bcrypt = require('bcrypt');
 const { sendVerificationEmail } = require('../services/emailService');
 const tempStorage = require('../utils/tempStorage');
@@ -206,6 +206,24 @@ exports.registerLocalUser = async (req, res, next) => {
 
 exports.logoutUser = async (req, res, next) => {
   try {
+    const authHeader = req.headers.authorization;
+    let accessToken = null;
+    if (authHeader?.startsWith('Bearer ')) {
+      accessToken = authHeader.split(' ')[1];
+    }
+
+    const refreshToken = req.cookies.refreshToken;
+
+    const promises = [];
+    if (accessToken) {
+      promises.push(addToBlacklist(accessToken));
+    }
+    if (refreshToken) {
+      promises.push(addToBlacklist(refreshToken));
+    }
+
+    await Promise.all(promises);
+
     // 쿠키 삭제 (만료시간을 과거로 설정)
     res.cookie('refreshToken', '', {
       path: '/',
