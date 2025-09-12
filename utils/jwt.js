@@ -42,36 +42,33 @@ const generateToken = (user) => {
   return { accessToken, refreshToken };
 };
 
-const addToBlacklist = async (token, expiresIn = null) => {
+const addRefreshTokenToBlacklist = async (refreshToken) => {
   try {
-    if (!token) return;
+    if (!refreshToken) return;
     
-    // JWT에서 만료 시간 추출
-    let expiry = expiresIn;
-    if (!expiry) {
-      const decoded = jwt.decode(token);
-      if (decoded?.exp) {
-        expiry = decoded.exp - Math.floor(Date.now() / 1000);
-      } else {
-        expiry = 86400;
-      }
+    const decoded = jwt.decode(refreshToken);
+    let expiry;
+    if (decoded?.exp) {
+      expiry = decoded.exp - Math.floor(Date.now() / 1000);
+    } else {
+      expiry = 604800;
     }
     
     if (expiry > 0) {
-      await redisClient.setEx(`blacklist:${token}`, expiry, 'revoked');
+      await redisClient.setEx(`blacklist_refresh:${refreshToken}`, expiry, 'revoked');
     }
   } catch (error) {
-    console.error('토큰 블랙리스트 추가 오류:', error);
+    console.error('Refresh 토큰 블랙리스트 추가 오류:', error);
   }
 };
 
-const isBlacklisted = async (token) => {
+const isRefreshTokenBlacklisted = async (refreshToken) => {
   try {
-    if (!token) return false;
-    const result = await redisClient.get(`blacklist:${token}`);
+    if (!refreshToken) return false;
+    const result = await redisClient.get(`blacklist_refresh:${refreshToken}`);
     return result !== null;
   } catch (error) {
-    console.error('블랙리스트 확인 오류:', error);
+    console.error('Refresh 토큰 블랙리스트 확인 오류:', error);
     return false;
   }
 };
@@ -116,8 +113,8 @@ const getCachedUserStatus = async (userId) => {
 
 module.exports = {
   generateToken,
-  addToBlacklist,
-  isBlacklisted,
+  addRefreshTokenToBlacklist,
+  isRefreshTokenBlacklisted,
   revokeAllUserTokens,
   isUserTokenRevoked,
   cacheUserStatus,

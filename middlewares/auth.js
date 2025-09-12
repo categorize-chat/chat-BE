@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require("../schemas/user");
-const { generateToken, isBlacklisted, isUserTokenRevoked, getCachedUserStatus, cacheUserStatus } = require('../utils/jwt');
+const { generateToken, isRefreshTokenBlacklisted, isUserTokenRevoked, getCachedUserStatus, cacheUserStatus } = require('../utils/jwt');
 
 const authMiddleware = async (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -10,7 +10,7 @@ const authMiddleware = async (req, res, next) => {
     const refreshToken = req.cookies.refreshToken;
     if (refreshToken) {
       try {
-        if (await isBlacklisted(refreshToken)) {
+        if (await isRefreshTokenBlacklisted(refreshToken)) {
           return res.status(401).json({
             isSuccess: false,
             code: 401,
@@ -81,14 +81,6 @@ const authMiddleware = async (req, res, next) => {
   }
 
   const accessToken = authHeader.split(' ')[1];
-  
-  if (await isBlacklisted(accessToken)) {
-    return res.status(401).json({
-      isSuccess: false,
-      code: 401,
-      message: '토큰이 무효화되었습니다. 다시 로그인해주세요.'
-    });
-  }
   
   let decoded;
   try {
